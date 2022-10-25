@@ -34,7 +34,8 @@ impl MockStorage {
     #[cfg(feature = "iterator")]
     pub fn new_iterator(&mut self, records: Vec<Record>) -> u32 {
         self.iterator_id_ctr += 1;
-        self.iterators.insert(self.iterator_id_ctr - 1, (records, 0));
+        self.iterators
+            .insert(self.iterator_id_ctr - 1, (records, 0));
         self.iterator_id_ctr - 1
     }
 }
@@ -57,10 +58,7 @@ impl Storage for MockStorage {
         let range = match (start, end) {
             (Some(s), Some(e)) => {
                 if start > end {
-                    return (
-                        Ok(self.new_iterator(vec![])),
-                        GasInfo::free(),
-                    );
+                    return (Ok(self.new_iterator(vec![])), GasInfo::free());
                 } else {
                     self.data.range(s.to_vec()..e.to_vec())
                 }
@@ -71,9 +69,7 @@ impl Storage for MockStorage {
         };
         let mut records: Vec<Record> = range.map(|(x, y)| (x.clone(), y.clone())).collect();
         match order {
-            Order::Ascending => {
-                (Ok(self.new_iterator(records)), GasInfo::free())
-            }
+            Order::Ascending => (Ok(self.new_iterator(records)), GasInfo::free()),
             Order::Descending => {
                 records.reverse();
                 (Ok(self.new_iterator(records)), GasInfo::free())
@@ -86,8 +82,7 @@ impl Storage for MockStorage {
         if let Some((records, index)) = self.iterators.get_mut(&iterator_id) {
             if *index >= records.len() {
                 (Ok(None), GasInfo::free())
-            }
-            else {
+            } else {
                 *index += 1;
                 (Ok(Some(records[*index - 1].clone())), GasInfo::free())
             }
