@@ -1,77 +1,117 @@
 use std::collections::BTreeMap;
+use std::fmt;
 #[cfg(feature = "iterator")]
-use std::{
-    iter,
-    ops::{Bound, RangeBounds},
-};
+use std::iter;
 
-
-use cosmwasm_vm::{ReadonlyStorage, FfiResult, Storage, Api, FfiError, Extern};
-use cosmwasm_std::{HumanAddr, CanonicalAddr, Binary, Coin};
 use crate::contract_vm::watcher;
+use cosmwasm_std::{Coin, Order};
+use cosmwasm_vm::{Backend, BackendApi, BackendError, BackendResult, GasInfo, Storage};
+
+use cosmwasm_std::Record;
 
 ///mock storage
-#[derive(Default, Debug)]
+#[derive(Default)]
 pub struct MockStorage {
     data: BTreeMap<Vec<u8>, Vec<u8>>,
+    #[cfg(feature = "iterator")]
+    iterators: BTreeMap<u32, (Vec<Record>, usize)>,
+    #[cfg(feature = "iterator")]
+    iterator_id_ctr: u32,
+}
+
+impl fmt::Debug for MockStorage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "MockStorage")?;
+        Ok(())
+    }
 }
 
 impl MockStorage {
     pub fn new() -> Self {
         MockStorage::default()
     }
-}
-
-
-impl ReadonlyStorage for MockStorage {
-    fn get(&self, key: &[u8]) -> FfiResult<Option<Vec<u8>>> {
-        Ok(self.data.get(key).cloned())
-    }
 
     #[cfg(feature = "iterator")]
-    fn range<'a>(
-        &'a self,
-        start: Option<&[u8]>,
-        end: Option<&[u8]>,
-        order: Order,
-    ) -> FfiResult<Box<dyn Iterator<Item = FfiResult<KV>> + 'a>> {
-        let bounds = range_bounds(start, end);
-
-        // BTreeMap.range panics if range is start > end.
-        // However, this cases represent just empty range and we treat it as such.
-        match (bounds.start_bound(), bounds.end_bound()) {
-            (Bound::Included(start), Bound::Excluded(end)) if start > end => {
-                return Ok(Box::new(iter::empty()));
-            }
-            _ => {}
-        }
-
-        let iter = self.data.range(bounds);
-        Ok(match order {
-            Order::Ascending => Box::new(iter.map(clone_item).map(FfiResult::Ok)),
-            Order::Descending => Box::new(iter.rev().map(clone_item).map(FfiResult::Ok)),
-        })
+    pub fn new_iterator(&mut self, records: Vec<Record>) -> u32 {
+        self.iterator_id_ctr += 1;
+        self.iterators.insert(self.iterator_id_ctr - 1, (records, 0));
+        self.iterator_id_ctr - 1
     }
 }
 
 impl Storage for MockStorage {
+    fn get(&self, key: &[u8]) -> BackendResult<Option<Vec<u8>>> {
+        (Ok(self.data.get(key).cloned()), GasInfo::free())
+    }
 
-    fn set(&mut self, key: &[u8], value: &[u8]) -> FfiResult<()> {
+    #[cfg(feature = "iterator")]
+    fn scan(
+        &mut self,
+        start: Option<&[u8]>,
+        end: Option<&[u8]>,
+        order: Order,
+    ) -> BackendResult<u32> {
+        // BTreeMap.range panics if range is start > end.
+        // However, this cases represent just empty range and we treat it as such.
+
+        let range = match (start, end) {
+            (Some(s), Some(e)) => {
+                if start > end {
+                    return (
+                        Ok(self.new_iterator(vec![])),
+                        GasInfo::free(),
+                    );
+                } else {
+                    self.data.range(s.to_vec()..e.to_vec())
+                }
+            }
+            (Some(s), None) => self.data.range(s.to_vec()..),
+            (None, Some(e)) => self.data.range(..e.to_vec()),
+            (None, None) => self.data.range(vec![]..),
+        };
+        let mut records: Vec<Record> = range.map(|(x, y)| (x.clone(), y.clone())).collect();
+        match order {
+            Order::Ascending => {
+                (Ok(self.new_iterator(records)), GasInfo::free())
+            }
+            Order::Descending => {
+                records.reverse();
+                (Ok(self.new_iterator(records)), GasInfo::free())
+            }
+        }
+    }
+
+    #[cfg(feature = "iterator")]
+    fn next(&mut self, iterator_id: u32) -> BackendResult<Option<Record>> {
+        if let Some((records, index)) = self.iterators.get_mut(&iterator_id) {
+            if *index >= records.len() {
+                (Ok(None), GasInfo::free())
+            }
+            else {
+                *index += 1;
+                (Ok(Some(records[*index - 1].clone())), GasInfo::free())
+            }
+        } else {
+            (
+                Err(BackendError::IteratorDoesNotExist { id: iterator_id }),
+                GasInfo::free(),
+            )
+        }
+    }
+
+    fn set(&mut self, key: &[u8], value: &[u8]) -> BackendResult<()> {
         self.data.insert(key.to_vec(), value.to_vec());
-        watcher::logger_storage_event_insert(key,value);
-        Ok(())
+        watcher::logger_storage_event_insert(key, value);
+        (Ok(()), GasInfo::free())
     }
 
-    fn remove(&mut self, key: &[u8]) -> FfiResult<()> {
+    fn remove(&mut self, key: &[u8]) -> BackendResult<()> {
         self.data.remove(key);
-
-        Ok(())
+        (Ok(()), GasInfo::free())
     }
 }
 
-impl MockStorage{
-
-}
+impl MockStorage {}
 
 //mock api
 #[derive(Copy, Clone)]
@@ -91,53 +131,68 @@ impl Default for MockApi {
     }
 }
 
-impl Api for MockApi {
-    fn canonical_address(&self, human: &HumanAddr) -> FfiResult<CanonicalAddr> {
+impl BackendApi for MockApi {
+    fn canonical_address(&self, human: &str) -> BackendResult<Vec<u8>> {
         // Dummy input validation. This is more sophisticated for formats like bech32, where format and checksum are validated.
         if human.len() < 3 {
-            return Err(FfiError::other("Invalid input: human address too short"));
+            return (
+                Err(BackendError::user_err(
+                    "Invalid input: human address too short",
+                )),
+                GasInfo::free(),
+            );
         }
         if human.len() > self.canonical_length {
-            return Err(FfiError::other("Invalid input: human address too long"));
+            return (
+                Err(BackendError::user_err(
+                    "Invalid input: human address too long",
+                )),
+                GasInfo::free(),
+            );
         }
 
-        let mut out = Vec::from(human.as_str());
+        let mut out = Vec::from(human);
         let append = self.canonical_length - out.len();
         if append > 0 {
             out.extend(vec![0u8; append]);
         }
-        Ok(CanonicalAddr(Binary(out)))
+        (Ok(out), GasInfo::free())
     }
 
-    fn human_address(&self, canonical: &CanonicalAddr) -> FfiResult<HumanAddr> {
+    fn human_address(&self, canonical: &[u8]) -> BackendResult<String> {
         if canonical.len() != self.canonical_length {
-            return Err(FfiError::other(
-                "Invalid input: canonical address length not correct",
-            ));
+            return (
+                Err(BackendError::user_err(
+                    "Invalid input: canonical address length not correct",
+                )),
+                GasInfo::free(),
+            );
         }
 
         // remove trailing 0's (TODO: fix this - but fine for first tests)
-        let trimmed: Vec<u8> = canonical
-            .as_slice()
-            .iter()
-            .cloned()
-            .filter(|&x| x != 0)
-            .collect();
+        let trimmed: Vec<u8> = canonical.iter().cloned().filter(|&x| x != 0).collect();
         // decode UTF-8 bytes into string
-        let human = String::from_utf8(trimmed)
-            .map_err(|_| FfiError::other("Could not parse human address result as utf-8"))?;
-        Ok(HumanAddr(human))
+        if let Ok(human) = String::from_utf8(trimmed) {
+            (Ok(human), GasInfo::free())
+        } else {
+            (
+                Err(BackendError::user_err(
+                    "Invalid input: canonical address not decodable",
+                )),
+                GasInfo::free(),
+            )
+        }
     }
 }
 
-pub fn new_mock(canonical_length: usize,
-                contract_balance: &[Coin],
-                contract_addr : &str
-) -> Extern<MockStorage,MockApi,cosmwasm_vm::testing::MockQuerier>{
-    let human_addr = HumanAddr::from(contract_addr);
-    Extern {
+pub fn new_mock(
+    canonical_length: usize,
+    contract_balance: &[Coin],
+    contract_addr: &str,
+) -> Backend<MockApi, MockStorage, cosmwasm_vm::testing::MockQuerier> {
+    Backend {
         storage: MockStorage::default(),
         api: MockApi::new(canonical_length),
-        querier: cosmwasm_vm::testing::MockQuerier::new(&[(&human_addr, contract_balance)]),
+        querier: cosmwasm_vm::testing::MockQuerier::new(&[(contract_addr, contract_balance)]),
     }
 }
