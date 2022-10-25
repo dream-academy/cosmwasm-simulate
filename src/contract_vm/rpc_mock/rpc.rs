@@ -136,22 +136,26 @@ impl CwRpcClient {
 mod tests {
     use tonic::transport::Endpoint;
 
-    use crate::contract_vm::rpc_mock::rpc::CwRpcClient;
-    use crate::contract_vm::rpc_mock::rpc::rpc_items::cosmos::bank::v1beta1::QueryAllBalancesRequest;
     use crate::contract_vm::rpc_mock::rpc::rpc_items::cosmos::bank::v1beta1::query_client::QueryClient;
+    use crate::contract_vm::rpc_mock::rpc::rpc_items::cosmos::bank::v1beta1::QueryAllBalancesRequest;
     use crate::contract_vm::rpc_mock::rpc::wait_future;
+    use crate::contract_vm::rpc_mock::rpc::CwRpcClient;
     #[test]
     fn test_rpc_malaga() {
         let rpc_url = "https://rpc.malaga-420.cosmwasm.com:443";
         let client = CwRpcClient::new(rpc_url, None).unwrap();
         let chain_id = client.chain_id().unwrap();
         assert_eq!(chain_id.as_str(), "malaga-420");
-        let mut client = wait_future(QueryClient::connect(rpc_url)).unwrap().unwrap();
         let request = tonic::Request::new(QueryAllBalancesRequest {
             address: "wasm1zcnn5gh37jxg9c6dp4jcjc7995ae0s5f5hj0lj".to_string(),
             pagination: None,
         });
-        let abci_query = wait_future(client.all_balances(request)).unwrap().unwrap();
+        let abci_query = wait_future(async {
+            let mut client = QueryClient::connect(rpc_url).await.unwrap();
+            client.all_balances(request).await
+        })
+        .unwrap()
+        .unwrap();
         println!("{:?}", abci_query);
     }
 }
