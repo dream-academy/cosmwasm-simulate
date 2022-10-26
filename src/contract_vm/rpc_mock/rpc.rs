@@ -6,6 +6,7 @@ use tendermint::block::Height;
 use tendermint_rpc::endpoint::abci_query::AbciQuery;
 use tendermint_rpc::{Client, HttpClient};
 use tokio;
+use prost::Message;
 
 use crate::contract_vm::error::Error;
 
@@ -32,6 +33,17 @@ pub mod rpc_items {
 pub struct CwRpcClient {
     _inner: HttpClient,
     block_number: u64,
+}
+
+// protobuf serialize + hexencode
+fn serialize<M: Message>(m: &M) -> Result<Vec<u8>, Error> {
+    let mut out = Vec::new();
+    match m.encode(&mut out) {
+        Ok(_) => {
+            Ok(out)
+        },
+        Err(e) => Err(Error::protobuf_error(e))
+    }
 }
 
 fn wait_future<F: Future>(f: F) -> Result<F::Output, Error> {
@@ -100,7 +112,7 @@ impl CwRpcClient {
         Ok(status.sync_info.latest_block_height.value())
     }
 
-    pub fn query_raw(&self, path: &str, data: &str) -> Result<AbciQuery, Error> {
+    pub fn query_raw(&self, path: &str, data: &[u8]) -> Result<AbciQuery, Error> {
         let path = match abci::Path::from_str(path) {
             Ok(p) => p,
             Err(e) => {
@@ -130,6 +142,35 @@ impl CwRpcClient {
             };
         Ok(result)
     }
+
+    pub fn query_bank_balance_all(&self, address: &str) -> Result<Vec<(String, u64)>, Error> {
+        use crate::contract_vm::rpc_mock::rpc::rpc_items::cosmos::bank::v1beta1::QueryAllBalancesRequest;
+        use crate::contract_vm::rpc_mock::rpc::rpc_items::cosmos::bank::v1beta1::QueryAllBalancesResponse;
+        let request = QueryAllBalancesRequest {
+            address: address.to_string(),
+            pagination: None,
+        };
+        let path = "/cosmos.bank.v1beta1.Query/AllBalances";
+        let data = serialize(&request).unwrap();
+        let out = self.query_raw(path, data.as_slice()).unwrap();
+        match out.code {
+            abci::Code::Ok => {
+                let resp = match QueryAllBalancesResponse::decode(out.value.as_slice()) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        return Err(Error::protobuf_error(e));
+                    }
+                };
+                let balances: Vec<(String, u64)> = resp.balances.iter().map(|x| {
+                    (x.denom.to_string(), u64::from_str(&x.amount).unwrap())
+                }).collect();
+                Ok(balances)
+            },
+            _ => {
+                Err(Error::tendermint_error(out.log))
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -139,6 +180,7 @@ mod tests {
     use crate::contract_vm::rpc_mock::rpc::rpc_items::cosmos::bank::v1beta1::query_client::QueryClient;
     use crate::contract_vm::rpc_mock::rpc::rpc_items::cosmos::bank::v1beta1::QueryAllBalancesRequest;
     use crate::contract_vm::rpc_mock::rpc::wait_future;
+    use crate::contract_vm::rpc_mock::rpc::serialize;
     use crate::contract_vm::rpc_mock::rpc::CwRpcClient;
     #[test]
     fn test_rpc_malaga() {
@@ -146,16 +188,8 @@ mod tests {
         let client = CwRpcClient::new(rpc_url, None).unwrap();
         let chain_id = client.chain_id().unwrap();
         assert_eq!(chain_id.as_str(), "malaga-420");
-        let request = tonic::Request::new(QueryAllBalancesRequest {
-            address: "wasm1zcnn5gh37jxg9c6dp4jcjc7995ae0s5f5hj0lj".to_string(),
-            pagination: None,
-        });
-        let abci_query = wait_future(async {
-            let mut client = QueryClient::connect(rpc_url).await.unwrap();
-            client.all_balances(request).await
-        })
-        .unwrap()
-        .unwrap();
-        println!("{:?}", abci_query);
+        let address = "wasm1zcnn5gh37jxg9c6dp4jcjc7995ae0s5f5hj0lj";
+        let balances = client.query_bank_balance_all(address).unwrap();
+        assert_eq!(balances[0].0.as_str(), "umlg");
     }
 }

@@ -6,6 +6,7 @@ pub enum Error {
     RpcError(String),
     InvalidArg(String),
     TendermintError(String),
+    ProtobufError(String),
 }
 
 impl Error {
@@ -24,6 +25,10 @@ impl Error {
     pub fn tendermint_error<T: ToString>(msg: T) -> Self {
         Self::TendermintError(msg.to_string())
     }
+
+    pub fn protobuf_error<T: ToString>(msg: T) -> Self {
+        Self::ProtobufError(msg.to_string())
+    }
 }
 
 impl fmt::Display for Error {
@@ -40,6 +45,9 @@ impl fmt::Display for Error {
             }
             Self::TendermintError(s) => {
                 writeln!(f, "tendermint error: {}", s)?;
+            }
+            Self::ProtobufError(s) => {
+                writeln!(f, "protobuf error: {}", s)?;
             }
         }
         Ok(())
