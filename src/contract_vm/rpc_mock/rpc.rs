@@ -10,21 +10,27 @@ use prost::Message;
 
 use crate::contract_vm::error::Error;
 
+macro_rules! include_proto {
+    ($x: literal) => {
+        include!(concat!(env!("OUT_DIR"), "/", $x, ".rs"));
+    };
+}
+
 pub mod rpc_items {
     pub mod cosmos {
         pub mod base {
             pub mod v1beta1 {
-                tonic::include_proto!("cosmos.base.v1beta1");
+                include_proto!("cosmos.base.v1beta1");
             }
             pub mod query {
                 pub mod v1beta1 {
-                    tonic::include_proto!("cosmos.base.query.v1beta1");
+                    include_proto!("cosmos.base.query.v1beta1");
                 }
             }
         }
         pub mod bank {
             pub mod v1beta1 {
-                tonic::include_proto!("cosmos.bank.v1beta1");
+                include_proto!("cosmos.bank.v1beta1");
             }
         }
     }
@@ -143,7 +149,7 @@ impl CwRpcClient {
         Ok(result)
     }
 
-    pub fn query_bank_balance_all(&self, address: &str) -> Result<Vec<(String, u64)>, Error> {
+    pub fn query_bank_all_balances(&self, address: &str) -> Result<Vec<(String, u64)>, Error> {
         use crate::contract_vm::rpc_mock::rpc::rpc_items::cosmos::bank::v1beta1::QueryAllBalancesRequest;
         use crate::contract_vm::rpc_mock::rpc::rpc_items::cosmos::bank::v1beta1::QueryAllBalancesResponse;
         let request = QueryAllBalancesRequest {
@@ -175,9 +181,6 @@ impl CwRpcClient {
 
 #[cfg(test)]
 mod tests {
-    use tonic::transport::Endpoint;
-
-    use crate::contract_vm::rpc_mock::rpc::rpc_items::cosmos::bank::v1beta1::query_client::QueryClient;
     use crate::contract_vm::rpc_mock::rpc::rpc_items::cosmos::bank::v1beta1::QueryAllBalancesRequest;
     use crate::contract_vm::rpc_mock::rpc::wait_future;
     use crate::contract_vm::rpc_mock::rpc::serialize;
@@ -189,7 +192,7 @@ mod tests {
         let chain_id = client.chain_id().unwrap();
         assert_eq!(chain_id.as_str(), "malaga-420");
         let address = "wasm1zcnn5gh37jxg9c6dp4jcjc7995ae0s5f5hj0lj";
-        let balances = client.query_bank_balance_all(address).unwrap();
+        let balances = client.query_bank_all_balances(address).unwrap();
         assert_eq!(balances[0].0.as_str(), "umlg");
     }
 }

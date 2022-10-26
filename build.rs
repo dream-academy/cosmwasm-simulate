@@ -1,8 +1,7 @@
 use std::io::Result;
-use tonic_build::configure;
+use prost_build::compile_protos;
 
 fn main() -> Result<()> {
-    let builder = configure().build_client(true);
-    builder.compile(&["proto/cosmos/bank/v1beta1/query.proto"], &["proto"])?;
+    compile_protos(&["proto/cosmos/bank/v1beta1/query.proto"], &["proto"])?;
     Ok(())
 }
