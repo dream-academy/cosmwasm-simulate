@@ -1,9 +1,12 @@
-use crate::contract_vm::rpc_mock::Coin;
+use crate::contract_vm::rpc_mock::rpc::CwRpcClient;
 use cosmwasm_std::{Binary, ContractResult, SystemResult};
 use cosmwasm_vm::{BackendResult, Querier};
-pub struct RpcMockQuerier {}
 
-impl Querier for RpcMockQuerier {
+pub struct RpcMockQuerier {
+    client: CwRpcClient,
+}
+
+impl<'a> Querier for RpcMockQuerier {
     fn query_raw(
         &self,
         request: &[u8],
@@ -13,8 +16,10 @@ impl Querier for RpcMockQuerier {
     }
 }
 
-impl RpcMockQuerier {
-    pub fn new(balances: &[(&str, &[Coin])]) -> Self {
-        unimplemented!()
+impl<'a> RpcMockQuerier {
+    pub fn new(client: &CwRpcClient) -> Self {
+        Self {
+            client: client.clone(),
+        }
     }
 }

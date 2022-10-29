@@ -1,15 +1,21 @@
+use cosmwasm_std::ContractInfo;
+use cosmwasm_std::Timestamp;
 use prost::Message;
 use std::collections::HashMap;
 use std::convert::TryFrom;
+use std::convert::TryInto;
 use std::future::Future;
 use std::str::FromStr;
 use tendermint::abci;
 use tendermint::block::Height;
+use tendermint::Time;
 use tendermint_rpc::endpoint::abci_query::AbciQuery;
 use tendermint_rpc::{Client, HttpClient};
 use tokio;
 
 use crate::contract_vm::error::Error;
+
+use self::rpc_items::cosmwasm::wasm;
 
 macro_rules! include_proto {
     ($x: literal) => {
@@ -44,6 +50,7 @@ pub mod rpc_items {
     }
 }
 
+#[derive(Clone)]
 pub struct CwRpcClient {
     _inner: HttpClient,
     block_number: u64,
@@ -94,36 +101,39 @@ impl CwRpcClient {
         }
     }
 
+    pub fn block_number(&self) -> u64 {
+        return self.block_number;
+    }
+
     pub fn chain_id(&self) -> Result<String, Error> {
-        let status = match wait_future(self._inner.status()) {
-            Ok(r) => match r {
-                Ok(r) => r,
-                Err(e) => {
-                    return Err(Error::rpc_error(e));
-                }
-            },
-            Err(e) => {
-                return Err(e);
-            }
-        };
+        let status = wait_future(self._inner.status())?.map_err(|e| Error::rpc_error(e))?;
         Ok(status.node_info.network.to_string())
     }
 
-    pub fn block_height(&self) -> Result<u64, Error> {
-        let status = match wait_future(self._inner.status()) {
-            Ok(r) => match r {
-                Ok(r) => r,
-                Err(e) => {
-                    return Err(Error::rpc_error(e));
-                }
-            },
-            Err(e) => {
-                return Err(e);
-            }
-        };
-        Ok(status.sync_info.latest_block_height.value())
+    /// returns timestamp of self.block_number
+    pub fn timestamp(&self) -> Result<Timestamp, Error> {
+        let block_info =
+            wait_future(self._inner.block(
+                Height::try_from(self.block_number).map_err(|e| Error::tendermint_error(e))?,
+            ))?
+            .map_err(|e| Error::rpc_error(e))?;
+        let time = block_info.block.header.time;
+        let duration = time
+            .duration_since(Time::unix_epoch())
+            .map_err(|e| Error::tendermint_error(e))?;
+        Ok(Timestamp::from_nanos(
+            duration
+                .as_nanos()
+                .try_into()
+                .map_err(|e| Error::tendermint_error(e))?,
+        ))
     }
 
+    pub fn block_height(&self) -> Result<u64, Error> {
+        let status = wait_future(self._inner.status())?.map_err(|e| Error::rpc_error(e))?;
+        Ok(status.sync_info.latest_block_height.value())
+    }
+    
     pub fn query_raw(&self, path: &str, data: &[u8]) -> Result<AbciQuery, Error> {
         let path = match abci::Path::from_str(path) {
             Ok(p) => p,
@@ -137,21 +147,11 @@ impl CwRpcClient {
                 return Err(Error::tendermint_error(e));
             }
         };
-        let result =
-            match wait_future(
-                self._inner
-                    .abci_query(Some(path), data, Some(height), false),
-            ) {
-                Ok(r) => match r {
-                    Ok(r) => r,
-                    Err(e) => {
-                        return Err(Error::tendermint_error(e));
-                    }
-                },
-                Err(e) => {
-                    return Err(e);
-                }
-            };
+        let result = wait_future(
+            self._inner
+                .abci_query(Some(path), data, Some(height), false),
+        )?
+        .map_err(|e| Error::rpc_error(e))?;
         Ok(result)
     }
 
@@ -238,6 +238,59 @@ impl CwRpcClient {
                     out.insert(model.key, model.value);
                 }
                 Ok(out)
+            }
+            _ => Err(Error::tendermint_error(out.log)),
+        }
+    }
+
+    pub fn query_wasm_contract_info(&self, address: &str) -> Result<wasm::v1::ContractInfo, Error> {
+        use crate::contract_vm::rpc_mock::rpc::rpc_items::cosmwasm::wasm::v1::QueryContractInfoRequest;
+        use crate::contract_vm::rpc_mock::rpc::rpc_items::cosmwasm::wasm::v1::QueryContractInfoResponse;
+        let request = QueryContractInfoRequest {
+            address: address.to_string(),
+        };
+        let path = "/cosmwasm.wasm.v1.Query/ContractInfo";
+        let data = serialize(&request).unwrap();
+        let out = self.query_raw(path, data.as_slice()).unwrap();
+        match out.code {
+            abci::Code::Ok => {
+                let resp = match QueryContractInfoResponse::decode(out.value.as_slice()) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        return Err(Error::protobuf_error(e));
+                    }
+                };
+                if let Some(ci) = resp.contract_info {
+                    Ok(ci)
+                } else {
+                    Err(Error::invalid_argument(format!(
+                        "address {} is most likely not a contract address",
+                        address
+                    )))
+                }
+            }
+            _ => Err(Error::tendermint_error(out.log)),
+        }
+    }
+
+    pub fn query_wasm_contract_code(&self, code_id: u64) -> Result<Vec<u8>, Error> {
+        use crate::contract_vm::rpc_mock::rpc::rpc_items::cosmwasm::wasm::v1::QueryCodeRequest;
+        use crate::contract_vm::rpc_mock::rpc::rpc_items::cosmwasm::wasm::v1::QueryCodeResponse;
+        let request = QueryCodeRequest {
+            code_id: code_id,
+        };
+        let path = "/cosmwasm.wasm.v1.Query/Code";
+        let data = serialize(&request).unwrap();
+        let out = self.query_raw(path, data.as_slice()).unwrap();
+        match out.code {
+            abci::Code::Ok => {
+                let resp = match QueryCodeResponse::decode(out.value.as_slice()) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        return Err(Error::protobuf_error(e));
+                    }
+                };
+                Ok(resp.data)
             }
             _ => Err(Error::tendermint_error(out.log)),
         }
@@ -362,7 +415,20 @@ mod tests {
             serde_json::from_slice(states_pair[&pair_info_key].as_slice()).unwrap();
         let states_token = client.query_wasm_contract_all(TOKEN_ADDRESS).unwrap();
         let token_info_key = Vec::from("token_info");
-        let token_info: TokenInfo = serde_json::from_slice(states_token[&token_info_key].as_slice()).unwrap();
+        let token_info: TokenInfo =
+            serde_json::from_slice(states_token[&token_info_key].as_slice()).unwrap();
         assert_eq!(pair_info.asset_decimals[0], token_info.decimals);
+    }
+
+    #[test]
+    fn test_rpc_get_code() {
+        let client = CwRpcClient::new(MALAGA_RPC_URL, Some(MALAGA_BLOCK_NUMBER)).unwrap();
+        let contract_info = client.query_wasm_contract_info(PAIR_ADDRESS).unwrap();
+        assert_eq!(contract_info.code_id, 1786);
+        let wasm_code = client.query_wasm_contract_code(contract_info.code_id).unwrap();
+        // wasm header is \x00asm, for some contracts it may be gzip
+        assert_eq!(&wasm_code[0..4], &vec![0, 97, 115, 109]);
+        let wasm_code = client.query_wasm_contract_code(1).unwrap();
+        println!("{:?}", &wasm_code[0..4]);
     }
 }

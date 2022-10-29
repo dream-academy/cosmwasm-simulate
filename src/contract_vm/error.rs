@@ -7,6 +7,7 @@ pub enum Error {
     InvalidArg(String),
     TendermintError(String),
     ProtobufError(String),
+    VmError(String),
 }
 
 impl Error {
@@ -29,6 +30,10 @@ impl Error {
     pub fn protobuf_error<T: ToString>(msg: T) -> Self {
         Self::ProtobufError(msg.to_string())
     }
+
+    pub fn vm_error<T: ToString>(msg: T) -> Self {
+        Self::VmError(msg.to_string())
+    }
 }
 
 impl fmt::Display for Error {
@@ -48,6 +53,9 @@ impl fmt::Display for Error {
             }
             Self::ProtobufError(s) => {
                 writeln!(f, "protobuf error: {}", s)?;
+            }
+            Self::VmError(s) => {
+                writeln!(f, "vm error: {}", s)?;
             }
         }
         Ok(())
