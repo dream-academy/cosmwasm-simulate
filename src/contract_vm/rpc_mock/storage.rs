@@ -1,5 +1,5 @@
 use crate::contract_vm::Error;
-use cosmwasm_std::{Record, Order};
+use cosmwasm_std::{Order, Record};
 use cosmwasm_vm::{BackendError, BackendResult, GasInfo, Storage};
 
 use std::collections::BTreeMap;

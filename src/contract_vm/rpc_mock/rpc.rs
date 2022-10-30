@@ -1,10 +1,16 @@
 use cosmwasm_std::ContractInfo;
 use cosmwasm_std::Timestamp;
+use hex;
 use prost::Message;
+use rustbreak::{deser::Bincode, PathDatabase};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::convert::TryInto;
+use std::env;
+use std::fs;
 use std::future::Future;
+use std::path::Path;
 use std::str::FromStr;
 use tendermint::abci;
 use tendermint::block::Height;
@@ -22,6 +28,8 @@ macro_rules! include_proto {
         include!(concat!(env!("OUT_DIR"), "/", $x, ".rs"));
     };
 }
+
+const RPC_CACHE_DIRNAME: &str = ".cw-rpc-cache";
 
 pub mod rpc_items {
     pub mod cosmwasm {
@@ -50,10 +58,83 @@ pub mod rpc_items {
     }
 }
 
-#[derive(Clone)]
 pub struct CwRpcClient {
     _inner: HttpClient,
     block_number: u64,
+
+    cache: RpcCache,
+}
+
+pub enum RpcCache {
+    Empty,
+    FileBacked {
+        // (path: String, data: Vec<u8>) -> AbciQuery
+        db: PathDatabase<HashMap<(String, Vec<u8>), AbciQuery>, Bincode>,
+    },
+}
+
+fn sha256hex(input_str: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(input_str.as_bytes());
+    let result = hasher.finalize();
+    hex::encode(result)
+}
+
+impl RpcCache {
+    pub fn file_backed(url: &str, block_number: u64) -> Result<Self, Error> {
+        let filename = sha256hex(&format!("{}||{}", url, block_number));
+        let homedir = match env::var("HOME") {
+            Ok(val) => val,
+            Err(_) => "/tmp/".to_string(),
+        };
+        let cachedir = format!("{}/{}", homedir, RPC_CACHE_DIRNAME);
+        let cachedir_path = Path::new(&cachedir);
+        if !cachedir_path.is_dir() {
+            fs::create_dir(cachedir_path).map_err(|e| Error::rpc_error(e))?;
+        }
+        let cachefile = format!("{}/{}", cachedir, filename);
+        let cachefile_path = Path::new(&cachefile);
+        println!("cache at: {}", cachefile_path.to_str().unwrap());
+        Ok(Self::FileBacked {
+            db: PathDatabase::load_from_path_or_default(cachefile_path.to_path_buf())
+                .map_err(|e| Error::rpc_error(e))?,
+        })
+    }
+
+    pub fn read(&self, path: &str, data: &[u8]) -> Result<Option<AbciQuery>, Error> {
+        let key = (path.to_string(), data.to_vec());
+        match self {
+            // empty always returns None
+            Self::Empty => Ok(None),
+            Self::FileBacked { db } => match db.read(|db| db.get(&key).map(|x| x.clone())) {
+                Ok(d) => Ok(d),
+                Err(e) => Err(Error::rpc_error(e)),
+            },
+        }
+    }
+
+    pub fn write(&mut self, path: &str, data: &[u8], response: &AbciQuery) -> Result<(), Error> {
+        let key = (path.to_string(), data.to_vec());
+        match self {
+            // empty always returns None
+            Self::Empty => Ok(()),
+            Self::FileBacked { db } => match db.write(|db| db.insert(key, response.clone())) {
+                Ok(d) => Ok(()),
+                Err(e) => Err(Error::rpc_error(e)),
+            },
+        }
+    }
+}
+
+impl Drop for RpcCache {
+    fn drop(&mut self) {
+        match self {
+            Self::Empty => {},
+            Self::FileBacked { db } => {
+                db.save().unwrap();
+            }
+        }
+    }
 }
 
 // protobuf serialize + hexencode
@@ -85,6 +166,7 @@ impl CwRpcClient {
                 }
             },
             block_number: 0,
+            cache: RpcCache::Empty,
         };
         let block_height = rv.block_height()?;
         if let Some(bn) = block_number {
@@ -93,10 +175,12 @@ impl CwRpcClient {
                 Err(Error::invalid_argument(msg))
             } else {
                 rv.block_number = bn;
+                rv.cache = RpcCache::file_backed(url, bn)?;
                 Ok(rv)
             }
         } else {
             rv.block_number = block_height;
+            rv.cache = RpcCache::file_backed(url, block_height)?;
             Ok(rv)
         }
     }
@@ -133,9 +217,12 @@ impl CwRpcClient {
         let status = wait_future(self._inner.status())?.map_err(|e| Error::rpc_error(e))?;
         Ok(status.sync_info.latest_block_height.value())
     }
-    
-    pub fn query_raw(&self, path: &str, data: &[u8]) -> Result<AbciQuery, Error> {
-        let path = match abci::Path::from_str(path) {
+
+    pub fn query_raw(&mut self, path_: &str, data: &[u8]) -> Result<AbciQuery, Error> {
+        if let Some(in_db) = self.cache.read(path_, data)? {
+            return Ok(in_db);
+        }
+        let path = match abci::Path::from_str(path_) {
             Ok(p) => p,
             Err(e) => {
                 return Err(Error::tendermint_error(e));
@@ -152,10 +239,11 @@ impl CwRpcClient {
                 .abci_query(Some(path), data, Some(height), false),
         )?
         .map_err(|e| Error::rpc_error(e))?;
+        self.cache.write(path_, data, &result);
         Ok(result)
     }
 
-    pub fn query_bank_all_balances(&self, address: &str) -> Result<Vec<(String, u64)>, Error> {
+    pub fn query_bank_all_balances(&mut self, address: &str) -> Result<Vec<(String, u128)>, Error> {
         use crate::contract_vm::rpc_mock::rpc::rpc_items::cosmos::bank::v1beta1::QueryAllBalancesRequest;
         use crate::contract_vm::rpc_mock::rpc::rpc_items::cosmos::bank::v1beta1::QueryAllBalancesResponse;
         let request = QueryAllBalancesRequest {
@@ -173,10 +261,10 @@ impl CwRpcClient {
                         return Err(Error::protobuf_error(e));
                     }
                 };
-                let balances: Vec<(String, u64)> = resp
+                let balances: Vec<(String, u128)> = resp
                     .balances
                     .iter()
-                    .map(|x| (x.denom.to_string(), u64::from_str(&x.amount).unwrap()))
+                    .map(|x| (x.denom.to_string(), u128::from_str(&x.amount).unwrap()))
                     .collect();
                 Ok(balances)
             }
@@ -185,7 +273,7 @@ impl CwRpcClient {
     }
 
     pub fn query_wasm_contract_smart(
-        &self,
+        &mut self,
         address: &str,
         query_data: &[u8],
     ) -> Result<Vec<u8>, Error> {
@@ -213,7 +301,7 @@ impl CwRpcClient {
     }
 
     pub fn query_wasm_contract_all(
-        &self,
+        &mut self,
         address: &str,
     ) -> Result<HashMap<Vec<u8>, Vec<u8>>, Error> {
         use crate::contract_vm::rpc_mock::rpc::rpc_items::cosmwasm::wasm::v1::QueryAllContractStateRequest;
@@ -243,7 +331,7 @@ impl CwRpcClient {
         }
     }
 
-    pub fn query_wasm_contract_info(&self, address: &str) -> Result<wasm::v1::ContractInfo, Error> {
+    pub fn query_wasm_contract_info(&mut self, address: &str) -> Result<wasm::v1::ContractInfo, Error> {
         use crate::contract_vm::rpc_mock::rpc::rpc_items::cosmwasm::wasm::v1::QueryContractInfoRequest;
         use crate::contract_vm::rpc_mock::rpc::rpc_items::cosmwasm::wasm::v1::QueryContractInfoResponse;
         let request = QueryContractInfoRequest {
@@ -273,12 +361,10 @@ impl CwRpcClient {
         }
     }
 
-    pub fn query_wasm_contract_code(&self, code_id: u64) -> Result<Vec<u8>, Error> {
+    pub fn query_wasm_contract_code(&mut self, code_id: u64) -> Result<Vec<u8>, Error> {
         use crate::contract_vm::rpc_mock::rpc::rpc_items::cosmwasm::wasm::v1::QueryCodeRequest;
         use crate::contract_vm::rpc_mock::rpc::rpc_items::cosmwasm::wasm::v1::QueryCodeResponse;
-        let request = QueryCodeRequest {
-            code_id: code_id,
-        };
+        let request = QueryCodeRequest { code_id: code_id };
         let path = "/cosmwasm.wasm.v1.Query/Code";
         let data = serialize(&request).unwrap();
         let out = self.query_raw(path, data.as_slice()).unwrap();
@@ -382,14 +468,14 @@ mod tests {
 
     #[test]
     fn test_rpc_bank() {
-        let client = CwRpcClient::new(MALAGA_RPC_URL, Some(MALAGA_BLOCK_NUMBER)).unwrap();
+        let mut client = CwRpcClient::new(MALAGA_RPC_URL, Some(MALAGA_BLOCK_NUMBER)).unwrap();
         let balances = client.query_bank_all_balances(EOA_ADDRESS).unwrap();
         assert_eq!(balances[0].0.as_str(), "umlg");
     }
 
     #[test]
     fn test_rpc_contract_small() {
-        let client = CwRpcClient::new(MALAGA_RPC_URL, Some(MALAGA_BLOCK_NUMBER)).unwrap();
+        let mut client = CwRpcClient::new(MALAGA_RPC_URL, Some(MALAGA_BLOCK_NUMBER)).unwrap();
         let qmsg = QueryMsg::Simulation {
             offer_asset: Asset {
                 info: AssetInfo::NativeToken {
@@ -408,7 +494,7 @@ mod tests {
 
     #[test]
     fn test_rpc_contract_large() {
-        let client = CwRpcClient::new(MALAGA_RPC_URL, Some(MALAGA_BLOCK_NUMBER)).unwrap();
+        let mut client = CwRpcClient::new(MALAGA_RPC_URL, Some(MALAGA_BLOCK_NUMBER)).unwrap();
         let states_pair = client.query_wasm_contract_all(PAIR_ADDRESS).unwrap();
         let pair_info_key = Vec::from("pair_info");
         let pair_info: PairInfo =
@@ -422,10 +508,12 @@ mod tests {
 
     #[test]
     fn test_rpc_get_code() {
-        let client = CwRpcClient::new(MALAGA_RPC_URL, Some(MALAGA_BLOCK_NUMBER)).unwrap();
+        let mut client = CwRpcClient::new(MALAGA_RPC_URL, Some(MALAGA_BLOCK_NUMBER)).unwrap();
         let contract_info = client.query_wasm_contract_info(PAIR_ADDRESS).unwrap();
         assert_eq!(contract_info.code_id, 1786);
-        let wasm_code = client.query_wasm_contract_code(contract_info.code_id).unwrap();
+        let wasm_code = client
+            .query_wasm_contract_code(contract_info.code_id)
+            .unwrap();
         // wasm header is \x00asm, for some contracts it may be gzip
         assert_eq!(&wasm_code[0..4], &vec![0, 97, 115, 109]);
         let wasm_code = client.query_wasm_contract_code(1).unwrap();

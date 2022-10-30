@@ -1,5 +1,8 @@
-use cosmwasm_std::{Addr, ContractInfo, ContractResult, Env, MessageInfo, Response, Timestamp, Coin};
-use cosmwasm_vm::{call_execute, call_instantiate, Instance, BackendApi};
+use core::marker::PhantomData;
+use cosmwasm_std::{
+    Addr, Coin, ContractInfo, ContractResult, Env, MessageInfo, Response, Timestamp,
+};
+use cosmwasm_vm::{call_execute, call_instantiate, BackendApi, Instance};
 
 use crate::contract_vm::rpc_mock::{querier::RpcMockQuerier, RpcMockApi, RpcMockStorage};
 use crate::contract_vm::Error;
@@ -10,12 +13,18 @@ pub struct RpcContractInstance {
     instance: RpcInstance,
 }
 
-impl<'a> RpcContractInstance {
+impl RpcContractInstance {
     pub fn make_instance(instance: RpcInstance) -> Self {
         Self { instance: instance }
     }
 
-    pub fn execute(&mut self, env: &Env, msg: &[u8], sender: &Addr, funds: &[Coin]) -> Result<Response, Error> {
+    pub fn execute(
+        &mut self,
+        env: &Env,
+        msg: &[u8],
+        sender: &Addr,
+        funds: &[Coin],
+    ) -> Result<Response, Error> {
         let info = MessageInfo {
             sender: sender.clone(),
             funds: funds.to_vec(),

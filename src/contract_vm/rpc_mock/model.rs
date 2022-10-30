@@ -3,16 +3,18 @@ use crate::contract_vm::rpc_mock::{
 };
 use crate::contract_vm::Error;
 
-use cosmwasm_std::{Addr, BlockInfo, Coin, ContractInfo, Env, Timestamp, TransactionInfo};
+use cosmwasm_std::{Addr, Coin, ContractInfo, Env, Timestamp};
 use cosmwasm_vm::{Backend, InstanceOptions, Storage};
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 type RpcBackend = Backend<RpcMockApi, RpcMockStorage, RpcMockQuerier>;
 
 pub struct Model {
     instances: HashMap<String, RpcContractInstance>,
-    bank: Bank,
-    client: CwRpcClient,
+    bank: Rc<RefCell<Bank>>,
+    client: Rc<RefCell<CwRpcClient>>,
     // similar to tx.origin of solidity
     eoa: String,
 
@@ -22,24 +24,20 @@ pub struct Model {
     chain_id: String,
     canonical_address_length: usize,
     bech32_prefix: String,
-
-    // for RpcContractInstance
 }
 
 const BLOCK_EPOCH: u64 = 1_000_000_000;
-const WASM_MAGIC: [u8;4] = [0, 97, 115, 109];
-const GZIP_MAGIC: [u8;4] = [0, 0, 0, 0];
+const WASM_MAGIC: [u8; 4] = [0, 97, 115, 109];
+const GZIP_MAGIC: [u8; 4] = [0, 0, 0, 0];
 const BASE_EOA: &str = "wasm1zcnn5gh37jxg9c6dp4jcjc7995ae0s5f5hj0lj";
 
 fn maybe_unzip(input: Vec<u8>) -> Result<Vec<u8>, Error> {
     let magic = &input[0..4];
     if magic == WASM_MAGIC {
         Ok(input)
-    }
-    else if magic == GZIP_MAGIC {
+    } else if magic == GZIP_MAGIC {
         unimplemented!();
-    }
-    else {
+    } else {
         eprintln!("unidentifiable magic: {:?}", magic);
         unimplemented!();
     }
@@ -53,15 +51,15 @@ impl Model {
         let chain_id = client.chain_id()?;
         Ok(Model {
             instances: HashMap::new(),
-            bank: Bank::new()?,
-            client: client,
+            bank: Rc::new(RefCell::new(Bank::new()?)),
+            client: Rc::new(RefCell::new(client)),
             eoa: BASE_EOA.to_string(),
 
-            block_number: block_number,
-            timestamp: timestamp,
-            chain_id: chain_id,
+            block_number,
+            timestamp,
+            chain_id,
             canonical_address_length: 32,
-            bech32_prefix: "wasm1".to_string()
+            bech32_prefix: "wasm1".to_string(),
         })
     }
 
@@ -71,9 +69,11 @@ impl Model {
             gas_limit: u64::MAX,
             print_debug: false,
         };
-        let contract_info = self.client.query_wasm_contract_info(address)?;
-        let wasm_code = maybe_unzip(self.client.query_wasm_contract_code(contract_info.code_id)?)?;
-        let inst = match cosmwasm_vm::Instance::from_code(wasm_code.as_slice(), deps, options, None) {
+        let mut client = self.client.borrow_mut();
+        let contract_info = client.query_wasm_contract_info(address)?;
+        let wasm_code = maybe_unzip(client.query_wasm_contract_code(contract_info.code_id)?)?;
+        let inst = match cosmwasm_vm::Instance::from_code(wasm_code.as_slice(), deps, options, None)
+        {
             Err(e) => {
                 return Err(Error::vm_error(e));
             }
@@ -118,8 +118,8 @@ impl Model {
         Ok(Backend {
             storage: self.mock_storage(contract_address)?,
             // is this correct?
-            api: RpcMockApi::new(self.canonical_address_length),
-            querier: RpcMockQuerier::new(&self.client),
+            api: RpcMockApi::new(self.canonical_address_length, self.bech32_prefix.as_str())?,
+            querier: RpcMockQuerier::new(&self.client, &self.bank),
         })
     }
 
@@ -141,7 +141,8 @@ impl Model {
 
     pub fn mock_storage(&self, contract_address: &str) -> Result<RpcMockStorage, Error> {
         let mut storage = RpcMockStorage::new();
-        let states = self.client.query_wasm_contract_all(contract_address)?;
+        let mut client = self.client.borrow_mut();
+        let states = client.query_wasm_contract_all(contract_address)?;
         for (k, v) in states {
             storage
                 .set(k.as_slice(), v.as_slice())
@@ -155,7 +156,7 @@ impl Model {
 #[cfg(test)]
 mod test {
 
-    use cosmwasm_std::{Addr, Uint128, Coin};
+    use cosmwasm_std::{Addr, Coin, Uint128};
     use serde::{Deserialize, Serialize};
     use serde_json::json;
 
@@ -189,7 +190,9 @@ mod test {
             denom: "umlg".to_string(),
             amount: Uint128::new(10),
         }];
-        let _ = model.execute(PAIR_ADDRESS, msg_bytes.as_bytes(), &funds).unwrap();
+        let _ = model
+            .execute(PAIR_ADDRESS, msg_bytes.as_bytes(), &funds)
+            .unwrap();
         assert_eq!(model.block_number, prev_block_num + 1);
     }
 }
