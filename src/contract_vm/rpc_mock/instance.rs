@@ -1,8 +1,8 @@
-use core::marker::PhantomData;
 use cosmwasm_std::{
-    Addr, Coin, ContractInfo, ContractResult, Env, MessageInfo, Response, Timestamp,
+    to_binary, Addr, Binary, Coin, ContractInfo, ContractResult, Env, MessageInfo, QueryResponse,
+    Response, Timestamp, WasmQuery,
 };
-use cosmwasm_vm::{call_execute, call_instantiate, BackendApi, Instance};
+use cosmwasm_vm::{call_execute, call_instantiate, call_query, Instance, Storage, VmError};
 
 use crate::contract_vm::rpc_mock::{querier::RpcMockQuerier, RpcMockApi, RpcMockStorage};
 use crate::contract_vm::Error;
@@ -10,12 +10,19 @@ use crate::contract_vm::Error;
 type RpcInstance = Instance<RpcMockApi, RpcMockStorage, RpcMockQuerier>;
 
 pub struct RpcContractInstance {
+    contract_info: ContractInfo,
     instance: RpcInstance,
 }
 
 impl RpcContractInstance {
-    pub fn make_instance(instance: RpcInstance) -> Self {
-        Self { instance: instance }
+    pub fn make_instance(address: &Addr, instance: RpcInstance) -> Self {
+        let contract_info = ContractInfo {
+            address: address.clone(),
+        };
+        Self {
+            contract_info,
+            instance,
+        }
     }
 
     pub fn execute(
@@ -38,5 +45,45 @@ impl RpcContractInstance {
             }
         };
         Ok(response)
+    }
+
+    pub fn query(&mut self, env: &Env, wasm_query: &WasmQuery) -> Result<Binary, Error> {
+        match wasm_query {
+            WasmQuery::ContractInfo { contract_addr: _ } => {
+                Ok(to_binary(&self.contract_info).unwrap())
+            }
+            WasmQuery::Raw {
+                contract_addr: _,
+                key,
+            } => {
+                if let Some(value) = self
+                    .instance
+                    .with_storage(|s| {
+                        let (res, _) = s.get(key.as_slice());
+                        match res {
+                            Ok(res) => Ok(res),
+                            Err(e) => Err(VmError::BackendErr { source: e }),
+                        }
+                    })
+                    .map_err(|e| Error::vm_error(e))?
+                {
+                    Ok(Binary::from(value.as_slice()))
+                } else {
+                    Ok(Binary::from(Vec::<u8>::new().as_slice()))
+                }
+            }
+            WasmQuery::Smart {
+                contract_addr: _,
+                msg,
+            } => {
+                match call_query(&mut self.instance, env, msg.as_slice())
+                    .map_err(|e| Error::vm_error(e))?
+                {
+                    ContractResult::Ok(r) => Ok(r),
+                    ContractResult::Err(e) => Err(Error::vm_error(&e)),
+                }
+            }
+            _ => unimplemented!(),
+        }
     }
 }

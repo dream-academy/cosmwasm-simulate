@@ -10,6 +10,7 @@ pub enum Error {
     VmError(String),
     StdError(String),
     IoError(String),
+    BankError(String),
 }
 
 impl Error {
@@ -40,9 +41,11 @@ impl Error {
     pub fn std_error<T: ToString>(msg: T) -> Self {
         Self::StdError(msg.to_string())
     }
-
     pub fn io_error<T: ToString>(msg: T) -> Self {
         Self::IoError(msg.to_string())
+    }
+    pub fn bank_error<T: ToString>(msg: T) -> Self {
+        Self::BankError(msg.to_string())
     }
 }
 
@@ -72,6 +75,9 @@ impl fmt::Display for Error {
             }
             Self::IoError(s) => {
                 writeln!(f, "I/O error: {}", s)?;
+            }
+            Self::BankError(s) => {
+                writeln!(f, "bank error: {}", s)?;
             }
         }
         Ok(())

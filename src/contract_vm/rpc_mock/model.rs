@@ -3,16 +3,16 @@ use crate::contract_vm::rpc_mock::{
 };
 use crate::contract_vm::Error;
 
-use cosmwasm_std::{Addr, Coin, ContractInfo, Env, Timestamp};
+use cosmwasm_std::{Addr, BankMsg, Coin, ContractInfo, CosmosMsg, Env, Timestamp, WasmMsg};
 use cosmwasm_vm::{Backend, InstanceOptions, Storage};
-use std::cell::RefCell;
+use std::cell::{RefCell, UnsafeCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
 type RpcBackend = Backend<RpcMockApi, RpcMockStorage, RpcMockQuerier>;
 
 pub struct Model {
-    instances: HashMap<String, RpcContractInstance>,
+    instances: Rc<UnsafeCell<HashMap<Addr, RpcContractInstance>>>,
     bank: Rc<RefCell<Bank>>,
     client: Rc<RefCell<CwRpcClient>>,
     // similar to tx.origin of solidity
@@ -49,28 +49,29 @@ impl Model {
         let block_number = client.block_number();
         let timestamp = client.timestamp()?;
         let chain_id = client.chain_id()?;
+        let client = Rc::new(RefCell::new(client));
         Ok(Model {
-            instances: HashMap::new(),
-            bank: Rc::new(RefCell::new(Bank::new()?)),
-            client: Rc::new(RefCell::new(client)),
+            instances: Rc::new(UnsafeCell::new(HashMap::new())),
+            bank: Rc::new(RefCell::new(Bank::new(&client)?)),
+            client,
             eoa: BASE_EOA.to_string(),
 
             block_number,
             timestamp,
             chain_id,
             canonical_address_length: 32,
-            bech32_prefix: "wasm1".to_string(),
+            bech32_prefix: "wasm".to_string(),
         })
     }
 
-    fn create_instance(&mut self, address: &str) -> Result<(), Error> {
-        let deps = self.new_mock(address)?;
+    fn create_instance(&mut self, contract_addr: &Addr) -> Result<(), Error> {
+        let deps = self.new_mock(&contract_addr)?;
         let options = InstanceOptions {
             gas_limit: u64::MAX,
             print_debug: false,
         };
         let mut client = self.client.borrow_mut();
-        let contract_info = client.query_wasm_contract_info(address)?;
+        let contract_info = client.query_wasm_contract_info(contract_addr.as_str())?;
         let wasm_code = maybe_unzip(client.query_wasm_contract_code(contract_info.code_id)?)?;
         let inst = match cosmwasm_vm::Instance::from_code(wasm_code.as_slice(), deps, options, None)
         {
@@ -79,8 +80,9 @@ impl Model {
             }
             Ok(i) => i,
         };
-        let instance = RpcContractInstance::make_instance(inst);
-        self.instances.insert(address.to_string(), instance);
+        let instance = RpcContractInstance::make_instance(&contract_addr, inst);
+        let instances = unsafe { self.instances.get().as_mut().unwrap() };
+        instances.insert(contract_addr.clone(), instance);
         Ok(())
     }
 
@@ -88,42 +90,76 @@ impl Model {
         unimplemented!()
     }
 
-    fn execute(&mut self, address: &str, msg: &[u8], funds: &[Coin]) -> Result<(), Error> {
-        let env = self.env(address)?;
-        let instance = match self.instances.get_mut(address) {
-            Some(i) => i,
-            None => {
-                self.create_instance(address)?;
-                self.instances.get_mut(address).unwrap()
-            }
-        };
-        let sender = Addr::unchecked(&self.eoa);
+    fn execute(&mut self, contract_addr: &Addr, msg: &[u8], funds: &[Coin]) -> Result<(), Error> {
+        let eoa = self.eoa.clone();
+        self.execute_inner(contract_addr, &Addr::unchecked(eoa), msg, funds)
+    }
+
+    fn execute_inner(
+        &mut self,
+        contract_addr: &Addr,
+        sender: &Addr,
+        msg: &[u8],
+        funds: &[Coin],
+    ) -> Result<(), Error> {
+        let env = self.env(contract_addr)?;
+        let instances = unsafe { self.instances.get().as_mut().unwrap() };
+        if !instances.contains_key(&contract_addr) {
+            self.create_instance(contract_addr)?;
+        }
+        let instance = instances.get_mut(contract_addr).unwrap();
         let response = instance.execute(&env, msg, &sender, funds)?;
         for resp in response.messages {
-            println!("{:?}", resp);
+            match &resp.msg {
+                CosmosMsg::Wasm(wasm_msg) => match wasm_msg {
+                    WasmMsg::Instantiate {
+                        admin,
+                        code_id,
+                        msg,
+                        funds,
+                        label,
+                    } => {
+                        unimplemented!()
+                    }
+                    WasmMsg::Execute {
+                        contract_addr: target_addr,
+                        msg,
+                        funds,
+                    } => {
+                        let target_addr = Addr::unchecked(target_addr);
+                        self.execute_inner(&target_addr, contract_addr, msg.as_slice(), funds)?;
+                    }
+                    _ => unimplemented!(),
+                },
+                CosmosMsg::Bank(bank_msg) => {
+                    self.bank.borrow_mut().execute(contract_addr, bank_msg)?;
+                }
+                _ => unimplemented!(),
+            }
         }
-        self.update_blockchain_context();
+        drop(instances);
+        self.update_block();
         Ok(())
     }
 
     /// emulate blockchain block creation
     /// increment block number by 1
     /// increment timestamp by a constant
-    fn update_blockchain_context(&mut self) {
+    fn update_block(&mut self) {
         self.block_number += 1;
         self.timestamp.plus_nanos(BLOCK_EPOCH);
     }
 
-    pub fn new_mock(&self, contract_address: &str) -> Result<RpcBackend, Error> {
+    pub fn new_mock(&self, contract_addr: &Addr) -> Result<RpcBackend, Error> {
         Ok(Backend {
-            storage: self.mock_storage(contract_address)?,
+            storage: self.mock_storage(contract_addr)?,
             // is this correct?
             api: RpcMockApi::new(self.canonical_address_length, self.bech32_prefix.as_str())?,
-            querier: RpcMockQuerier::new(&self.client, &self.bank),
+            querier: RpcMockQuerier::new(&self.client, &self.bank, &self.instances),
         })
     }
 
-    pub fn env(&self, contract_address: &str) -> Result<Env, Error> {
+    pub fn env(&self, contract_addr: &Addr) -> Result<Env, Error> {
         Ok(Env {
             block: cosmwasm_std::BlockInfo {
                 height: self.block_number,
@@ -134,15 +170,15 @@ impl Model {
             transaction: Some(cosmwasm_std::TransactionInfo { index: 0 }),
             // I don't really know what this is for, so for now, set it to the target contract address
             contract: ContractInfo {
-                address: Addr::unchecked(contract_address),
+                address: contract_addr.clone(),
             },
         })
     }
 
-    pub fn mock_storage(&self, contract_address: &str) -> Result<RpcMockStorage, Error> {
+    pub fn mock_storage(&self, contract_addr: &Addr) -> Result<RpcMockStorage, Error> {
         let mut storage = RpcMockStorage::new();
         let mut client = self.client.borrow_mut();
-        let states = client.query_wasm_contract_all(contract_address)?;
+        let states = client.query_wasm_contract_all(contract_addr.as_str())?;
         for (k, v) in states {
             storage
                 .set(k.as_slice(), v.as_slice())
@@ -190,8 +226,9 @@ mod test {
             denom: "umlg".to_string(),
             amount: Uint128::new(10),
         }];
+        let pair_address = Addr::unchecked(PAIR_ADDRESS);
         let _ = model
-            .execute(PAIR_ADDRESS, msg_bytes.as_bytes(), &funds)
+            .execute(&pair_address, msg_bytes.as_bytes(), &funds)
             .unwrap();
         assert_eq!(model.block_number, prev_block_num + 1);
     }
