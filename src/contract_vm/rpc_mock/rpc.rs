@@ -1,15 +1,19 @@
-use cosmwasm_std::ContractInfo;
 use cosmwasm_std::Timestamp;
 use hex;
 use prost::Message;
-use rustbreak::{deser::Bincode, PathDatabase};
+use ron;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::cmp::Eq;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::convert::TryInto;
 use std::env;
 use std::fs;
+use std::fs::OpenOptions;
 use std::future::Future;
+use std::hash::Hash;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::str::FromStr;
 use tendermint::abci;
@@ -65,12 +69,29 @@ pub struct CwRpcClient {
     cache: RpcCache,
 }
 
+#[derive(Deserialize, Serialize, PartialEq, Eq, Hash)]
+pub struct RpcCacheK {
+    path: String,
+    data: Vec<u8>,
+}
+
+pub type RpcCacheV = Vec<u8>;
+
 pub enum RpcCache {
     Empty,
     FileBacked {
-        // (path: String, data: Vec<u8>) -> AbciQuery
-        db: PathDatabase<HashMap<(String, Vec<u8>), AbciQuery>, Bincode>,
+        // (path: String, data: Vec<u8>) -> AbciQuery.value
+        db: HashMap<RpcCacheK, RpcCacheV>,
+        file: fs::File,
     },
+}
+
+fn rwopen<P: AsRef<Path>>(path: P) -> std::io::Result<fs::File> {
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(path)
 }
 
 fn sha256hex(input_str: &str) -> String {
@@ -90,59 +111,74 @@ impl RpcCache {
         let cachedir = format!("{}/{}", homedir, RPC_CACHE_DIRNAME);
         let cachedir_path = Path::new(&cachedir);
         if !cachedir_path.is_dir() {
-            fs::create_dir(cachedir_path).map_err(|e| Error::rpc_error(e))?;
+            fs::create_dir(cachedir_path).map_err(|e| Error::io_error(e))?;
         }
         let cachefile = format!("{}/{}", cachedir, filename);
         let cachefile_path = Path::new(&cachefile);
-        println!("cache at: {}", cachefile_path.to_str().unwrap());
-        Ok(Self::FileBacked {
-            db: PathDatabase::load_from_path_or_default(cachefile_path.to_path_buf())
-                .map_err(|e| Error::rpc_error(e))?,
-        })
+        let (file, db) = if cachefile_path.is_file() {
+            let mut file = rwopen(cachefile_path).map_err(|e| Error::io_error(e))?;
+            let mut file_contents = String::new();
+            let _ = file
+                .read_to_string(&mut file_contents)
+                .map_err(|e| Error::io_error(e))?;
+            let db: HashMap<RpcCacheK, RpcCacheV> =
+                ron::from_str(&file_contents).map_err(|e| Error::serialization_error(e))?;
+            (file, db)
+        } else {
+            let file = rwopen(cachefile_path).map_err(|e| Error::io_error(e))?;
+            (file, HashMap::new())
+        };
+        Ok(Self::FileBacked { db, file })
     }
 
-    pub fn read(&self, path: &str, data: &[u8]) -> Result<Option<AbciQuery>, Error> {
-        let key = (path.to_string(), data.to_vec());
+    pub fn read(&self, path: &str, data: &[u8]) -> Result<Option<Vec<u8>>, Error> {
+        let key = RpcCacheK {
+            path: path.to_string(),
+            data: data.to_vec(),
+        };
         match self {
             // empty always returns None
             Self::Empty => Ok(None),
-            Self::FileBacked { db } => match db.read(|db| db.get(&key).map(|x| x.clone())) {
-                Ok(d) => Ok(d),
-                Err(e) => Err(Error::rpc_error(e)),
-            },
+            Self::FileBacked { db, file: _ } => Ok(db.get(&key).map(|x| x.clone())),
         }
     }
 
-    pub fn write(&mut self, path: &str, data: &[u8], response: &AbciQuery) -> Result<(), Error> {
-        let key = (path.to_string(), data.to_vec());
+    pub fn write(&mut self, path: &str, data: &[u8], response: &Vec<u8>) -> Result<(), Error> {
+        let key = RpcCacheK {
+            path: path.to_string(),
+            data: data.to_vec(),
+        };
         match self {
             // empty always returns None
             Self::Empty => Ok(()),
-            Self::FileBacked { db } => match db.write(|db| db.insert(key, response.clone())) {
-                Ok(d) => Ok(()),
-                Err(e) => Err(Error::rpc_error(e)),
-            },
+            Self::FileBacked { db, file: _ } => {
+                db.insert(key, response.clone());
+                Ok(())
+            }
         }
     }
-}
 
-impl Drop for RpcCache {
-    fn drop(&mut self) {
+    pub fn save(&mut self) -> Result<(), Error> {
         match self {
-            Self::Empty => {},
-            Self::FileBacked { db } => {
-                db.save().unwrap();
+            Self::Empty => Ok(()),
+            Self::FileBacked { db, file } => {
+                let serialized = ron::to_string(db).map_err(|e| Error::serialization_error(e))?;
+                file.seek(SeekFrom::Start(0))
+                    .map_err(|e| Error::io_error(e))?;
+                file.write(serialized.as_bytes())
+                    .map_err(|e| Error::io_error(e))?;
+                Ok(())
             }
         }
     }
 }
 
-// protobuf serialize + hexencode
+// protobuf serialize
 fn serialize<M: Message>(m: &M) -> Result<Vec<u8>, Error> {
     let mut out = Vec::new();
     match m.encode(&mut out) {
         Ok(_) => Ok(out),
-        Err(e) => Err(Error::protobuf_error(e)),
+        Err(e) => Err(Error::serialization_error(e)),
     }
 }
 
@@ -218,7 +254,7 @@ impl CwRpcClient {
         Ok(status.sync_info.latest_block_height.value())
     }
 
-    pub fn query_raw(&mut self, path_: &str, data: &[u8]) -> Result<AbciQuery, Error> {
+    pub fn abci_query_raw(&mut self, path_: &str, data: &[u8]) -> Result<Vec<u8>, Error> {
         if let Some(in_db) = self.cache.read(path_, data)? {
             return Ok(in_db);
         }
@@ -239,8 +275,15 @@ impl CwRpcClient {
                 .abci_query(Some(path), data, Some(height), false),
         )?
         .map_err(|e| Error::rpc_error(e))?;
-        self.cache.write(path_, data, &result);
-        Ok(result)
+        match result.code {
+            abci::Code::Ok => {}
+            _ => {
+                return Err(Error::tendermint_error(result.log));
+            }
+        }
+        self.cache.write(path_, data, &result.value)?;
+        self.cache.save()?;
+        Ok(result.value)
     }
 
     pub fn query_bank_all_balances(&mut self, address: &str) -> Result<Vec<(String, u128)>, Error> {
@@ -252,24 +295,19 @@ impl CwRpcClient {
         };
         let path = "/cosmos.bank.v1beta1.Query/AllBalances";
         let data = serialize(&request).unwrap();
-        let out = self.query_raw(path, data.as_slice()).unwrap();
-        match out.code {
-            abci::Code::Ok => {
-                let resp = match QueryAllBalancesResponse::decode(out.value.as_slice()) {
-                    Ok(r) => r,
-                    Err(e) => {
-                        return Err(Error::protobuf_error(e));
-                    }
-                };
-                let balances: Vec<(String, u128)> = resp
-                    .balances
-                    .iter()
-                    .map(|x| (x.denom.to_string(), u128::from_str(&x.amount).unwrap()))
-                    .collect();
-                Ok(balances)
+        let out = self.abci_query_raw(path, data.as_slice()).unwrap();
+        let resp = match QueryAllBalancesResponse::decode(out.as_slice()) {
+            Ok(r) => r,
+            Err(e) => {
+                return Err(Error::serialization_error(e));
             }
-            _ => Err(Error::tendermint_error(out.log)),
-        }
+        };
+        let balances: Vec<(String, u128)> = resp
+            .balances
+            .iter()
+            .map(|x| (x.denom.to_string(), u128::from_str(&x.amount).unwrap()))
+            .collect();
+        Ok(balances)
     }
 
     pub fn query_wasm_contract_smart(
@@ -285,19 +323,14 @@ impl CwRpcClient {
         };
         let path = "/cosmwasm.wasm.v1.Query/SmartContractState";
         let data = serialize(&request).unwrap();
-        let out = self.query_raw(path, data.as_slice()).unwrap();
-        match out.code {
-            abci::Code::Ok => {
-                let resp = match QuerySmartContractStateResponse::decode(out.value.as_slice()) {
-                    Ok(r) => r,
-                    Err(e) => {
-                        return Err(Error::protobuf_error(e));
-                    }
-                };
-                Ok(resp.data)
+        let out = self.abci_query_raw(path, data.as_slice()).unwrap();
+        let resp = match QuerySmartContractStateResponse::decode(out.as_slice()) {
+            Ok(r) => r,
+            Err(e) => {
+                return Err(Error::serialization_error(e));
             }
-            _ => Err(Error::tendermint_error(out.log)),
-        }
+        };
+        Ok(resp.data)
     }
 
     pub fn query_wasm_contract_all(
@@ -312,26 +345,24 @@ impl CwRpcClient {
         };
         let path = "/cosmwasm.wasm.v1.Query/AllContractState";
         let data = serialize(&request).unwrap();
-        let out = self.query_raw(path, data.as_slice()).unwrap();
-        match out.code {
-            abci::Code::Ok => {
-                let resp = match QueryAllContractStateResponse::decode(out.value.as_slice()) {
-                    Ok(r) => r,
-                    Err(e) => {
-                        return Err(Error::protobuf_error(e));
-                    }
-                };
-                let mut out = HashMap::new();
-                for model in resp.models {
-                    out.insert(model.key, model.value);
-                }
-                Ok(out)
+        let out = self.abci_query_raw(path, data.as_slice()).unwrap();
+        let resp = match QueryAllContractStateResponse::decode(out.as_slice()) {
+            Ok(r) => r,
+            Err(e) => {
+                return Err(Error::serialization_error(e));
             }
-            _ => Err(Error::tendermint_error(out.log)),
+        };
+        let mut out = HashMap::new();
+        for model in resp.models {
+            out.insert(model.key, model.value);
         }
+        Ok(out)
     }
 
-    pub fn query_wasm_contract_info(&mut self, address: &str) -> Result<wasm::v1::ContractInfo, Error> {
+    pub fn query_wasm_contract_info(
+        &mut self,
+        address: &str,
+    ) -> Result<wasm::v1::ContractInfo, Error> {
         use crate::contract_vm::rpc_mock::rpc::rpc_items::cosmwasm::wasm::v1::QueryContractInfoRequest;
         use crate::contract_vm::rpc_mock::rpc::rpc_items::cosmwasm::wasm::v1::QueryContractInfoResponse;
         let request = QueryContractInfoRequest {
@@ -339,25 +370,20 @@ impl CwRpcClient {
         };
         let path = "/cosmwasm.wasm.v1.Query/ContractInfo";
         let data = serialize(&request).unwrap();
-        let out = self.query_raw(path, data.as_slice()).unwrap();
-        match out.code {
-            abci::Code::Ok => {
-                let resp = match QueryContractInfoResponse::decode(out.value.as_slice()) {
-                    Ok(r) => r,
-                    Err(e) => {
-                        return Err(Error::protobuf_error(e));
-                    }
-                };
-                if let Some(ci) = resp.contract_info {
-                    Ok(ci)
-                } else {
-                    Err(Error::invalid_argument(format!(
-                        "address {} is most likely not a contract address",
-                        address
-                    )))
-                }
+        let out = self.abci_query_raw(path, data.as_slice()).unwrap();
+        let resp = match QueryContractInfoResponse::decode(out.as_slice()) {
+            Ok(r) => r,
+            Err(e) => {
+                return Err(Error::serialization_error(e));
             }
-            _ => Err(Error::tendermint_error(out.log)),
+        };
+        if let Some(ci) = resp.contract_info {
+            Ok(ci)
+        } else {
+            Err(Error::invalid_argument(format!(
+                "address {} is most likely not a contract address",
+                address
+            )))
         }
     }
 
@@ -367,19 +393,14 @@ impl CwRpcClient {
         let request = QueryCodeRequest { code_id: code_id };
         let path = "/cosmwasm.wasm.v1.Query/Code";
         let data = serialize(&request).unwrap();
-        let out = self.query_raw(path, data.as_slice()).unwrap();
-        match out.code {
-            abci::Code::Ok => {
-                let resp = match QueryCodeResponse::decode(out.value.as_slice()) {
-                    Ok(r) => r,
-                    Err(e) => {
-                        return Err(Error::protobuf_error(e));
-                    }
-                };
-                Ok(resp.data)
+        let out = self.abci_query_raw(path, data.as_slice()).unwrap();
+        let resp = match QueryCodeResponse::decode(out.as_slice()) {
+            Ok(r) => r,
+            Err(e) => {
+                return Err(Error::serialization_error(e));
             }
-            _ => Err(Error::tendermint_error(out.log)),
-        }
+        };
+        Ok(resp.data)
     }
 }
 
@@ -388,7 +409,6 @@ mod tests {
     use crate::contract_vm::rpc_mock::rpc::CwRpcClient;
     use cosmwasm_std::{Addr, Uint128};
     use serde::{Deserialize, Serialize};
-    use serde_json::json;
 
     const MALAGA_RPC_URL: &'static str = "https://rpc.malaga-420.cosmwasm.com:443";
     const MALAGA_CHAIN_ID: &'static str = "malaga-420";
