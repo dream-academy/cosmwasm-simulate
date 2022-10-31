@@ -36,48 +36,59 @@ impl RpcMockApi {
     }
 }
 
+pub fn human_to_canonical(human: &str, bech32_prefix: &str) -> Result<Vec<u8>, String> {
+    if !human.starts_with(&bech32_prefix) {
+        return Err(format!(
+            "Invalid input: human address does not begin with bech32 prefix: {}",
+            human
+        ));
+    }
+    let (hrp, base32_vec, _) = match bech32::decode(human) {
+        Ok(a) => a,
+        Err(e) => {
+            return Err(format!(
+                "Invalid input: human address is not bech32 decodable: {}",
+                e
+            ));
+        }
+    };
+    if hrp != bech32_prefix {
+        Err(format!(
+            "Invalid input: human address has invalid bech32 prefix: {}",
+            hrp
+        ))
+    } else {
+        // canonical addresses can either be 20 bytes or 32 bytes
+        let out = Vec::<u8>::from_base32(&base32_vec).unwrap();
+        Ok(out)
+    }
+}
+
+pub fn canonical_to_human(
+    canonical: &[u8],
+    bech32_prefix: &str,
+    canon_length: usize,
+) -> Result<String, String> {
+    // canonical addresses can either be 20 bytes or 32 bytes
+    if canonical.len() > canon_length {
+        return Err("Invalid input: canonical address length not correct".to_string());
+    }
+    // decode UTF-8 bytes into string
+    if let Ok(human) = bech32::encode(bech32_prefix, canonical.to_base32(), Variant::Bech32) {
+        Ok(human)
+    } else {
+        Err("Invalid input: canonical address not encodable".to_string())
+    }
+}
+
 impl BackendApi for RpcMockApi {
     fn canonical_address(&self, human: &str) -> BackendResult<Vec<u8>> {
         let bech32_prefix = unsafe {
             String::from_utf8_unchecked(self.bech32_prefix[0..self.bech32_prefix_len].to_vec())
         };
-        if !human.starts_with(&bech32_prefix) {
-            return (
-                Err(BackendError::user_err(format!(
-                    "Invalid input: human address does not begin with bech32 prefix: {}",
-                    human
-                ))),
-                GasInfo::free(),
-            );
-        }
-        let (hrp, base32_vec, _) = match bech32::decode(human) {
-            Ok(a) => a,
-            Err(e) => {
-                return (
-                    Err(BackendError::UserErr {
-                        msg: format!(
-                            "Invalid input: human address is not bech32 decodable: {}",
-                            e
-                        ),
-                    }),
-                    GasInfo::free(),
-                );
-            }
-        };
-        if hrp != bech32_prefix {
-            (
-                Err(BackendError::UserErr {
-                    msg: format!(
-                        "Invalid input: human address has invalid bech32 prefix: {}",
-                        hrp
-                    ),
-                }),
-                GasInfo::free(),
-            )
-        } else {
-            // canonical addresses can either be 20 bytes or 32 bytes
-            let out = Vec::<u8>::from_base32(&base32_vec).unwrap();
-            (Ok(out), GasInfo::free())
+        match human_to_canonical(human, bech32_prefix.as_str()) {
+            Ok(c) => (Ok(c), GasInfo::free()),
+            Err(e) => (Err(BackendError::user_err(e)), GasInfo::free()),
         }
     }
 
@@ -85,30 +96,9 @@ impl BackendApi for RpcMockApi {
         let bech32_prefix = unsafe {
             String::from_utf8_unchecked(self.bech32_prefix[0..self.bech32_prefix_len].to_vec())
         };
-        // canonical addresses can either be 20 bytes or 32 bytes
-        if canonical.len() > self.canonical_length {
-            return (
-                Err(BackendError::user_err(
-                    "Invalid input: canonical address length not correct",
-                )),
-                GasInfo::free(),
-            );
-        }
-
-        // decode UTF-8 bytes into string
-        if let Ok(human) = bech32::encode(
-            bech32_prefix.as_str(),
-            canonical.to_base32(),
-            Variant::Bech32,
-        ) {
-            (Ok(human), GasInfo::free())
-        } else {
-            (
-                Err(BackendError::user_err(
-                    "Invalid input: canonical address not encodable",
-                )),
-                GasInfo::free(),
-            )
+        match canonical_to_human(canonical, bech32_prefix.as_str(), self.canonical_length) {
+            Ok(h) => (Ok(h), GasInfo::free()),
+            Err(e) => (Err(BackendError::user_err(e)), GasInfo::free()),
         }
     }
 }

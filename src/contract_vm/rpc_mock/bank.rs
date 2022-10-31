@@ -1,9 +1,11 @@
 use crate::contract_vm::rpc_mock::CwRpcClient;
 use crate::contract_vm::Error;
 use cosmwasm_std::{
-    to_binary, Addr, AllBalanceResponse, BalanceResponse, BankMsg, BankQuery, Binary, Coin, Uint128,
+    to_binary, Addr, AllBalanceResponse, BalanceResponse, BankMsg, BankQuery, Binary, Coin,
+    ContractResult, Uint128,
 };
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use tendermint_rpc::Response;
 
 pub struct Bank {
     // address -> ( denom -> amount )
@@ -112,14 +114,11 @@ impl Bank {
         match bank_msg {
             BankMsg::Send { to_address, amount } => {
                 let dst = Addr::unchecked(to_address);
-                self.send_internal(sender, &dst, amount)?;
+                self.send_internal(sender, &dst, amount)
             }
-            BankMsg::Burn { amount } => {
-                self.burn_internal(sender, amount)?;
-            }
+            BankMsg::Burn { amount } => self.burn_internal(sender, amount),
             _ => unimplemented!(),
         }
-        Ok(())
     }
 
     /// queries the bank structure maintained in-memory

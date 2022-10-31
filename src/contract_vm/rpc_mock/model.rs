@@ -1,3 +1,4 @@
+use crate::contract_vm::rpc_mock::api::{canonical_to_human, human_to_canonical};
 use crate::contract_vm::rpc_mock::{
     Bank, CwRpcClient, RpcContractInstance, RpcMockApi, RpcMockQuerier, RpcMockStorage,
 };
@@ -7,10 +8,10 @@ use cosmwasm_std::{
     Addr, BankMsg, Binary, Coin, ContractInfo, ContractResult, CosmosMsg, Env, Reply, ReplyOn,
     Response, SubMsgResponse, SubMsgResult, Timestamp, Uint128, WasmMsg, WasmQuery,
 };
-use cosmwasm_vm::{call_instantiate, Backend, InstanceOptions, Storage};
+use cosmwasm_vm::{Backend, InstanceOptions, Storage};
+use sha2::{Digest, Sha256};
 use std::cell::{RefCell, UnsafeCell};
 use std::collections::HashMap;
-use std::ops::Sub;
 use std::rc::Rc;
 
 pub type RpcBackend = Backend<RpcMockApi, RpcMockStorage, RpcMockQuerier>;
@@ -21,6 +22,8 @@ pub struct Model {
     client: Rc<RefCell<CwRpcClient>>,
     // similar to tx.origin of solidity
     eoa: String,
+    // used to generate addresses in instantiate
+    code_id_counters: HashMap<u64, u64>,
 
     // fields related to blockchain environment
     block_number: u64,
@@ -48,7 +51,11 @@ fn maybe_unzip(input: Vec<u8>) -> Result<Vec<u8>, Error> {
 }
 
 impl Model {
-    pub fn new(rpc_url: &str, block_number: Option<u64>, bech32_prefix: &str) -> Result<Self, Error> {
+    pub fn new(
+        rpc_url: &str,
+        block_number: Option<u64>,
+        bech32_prefix: &str,
+    ) -> Result<Self, Error> {
         let client = CwRpcClient::new(rpc_url, block_number)?;
         let block_number = client.block_number();
         let block_timestamp = client.timestamp()?;
@@ -59,6 +66,7 @@ impl Model {
             bank: Rc::new(RefCell::new(Bank::new(&client)?)),
             client,
             eoa: BASE_EOA.to_string(),
+            code_id_counters: HashMap::new(),
 
             block_number,
             block_timestamp,
@@ -90,6 +98,22 @@ impl Model {
         Ok(())
     }
 
+    fn generate_address(&mut self, code_id: u64) -> Result<Addr, Error> {
+        let code_id_counter = self.code_id_counters.entry(code_id).or_insert(0);
+        let seed = format!("seeeed_{}_{}", code_id, *code_id_counter);
+        *code_id_counter += 1;
+        let mut hasher = Sha256::new();
+        hasher.update(seed);
+        let bytes = hasher.finalize();
+        let addr = canonical_to_human(
+            bytes.as_slice(),
+            &self.bech32_prefix,
+            self.canonical_address_length,
+        )
+        .map_err(|e| Error::serialization_error(&e))?;
+        Ok(Addr::unchecked(addr))
+    }
+
     fn handle_response(
         &mut self,
         instance: &mut RpcContractInstance,
@@ -116,7 +140,7 @@ impl Model {
                             None => {}
                         }
                         // generate contract address automatically
-                        let contract_addr = Addr::unchecked("");
+                        let contract_addr = self.generate_address(*code_id)?;
                         (
                             self.instantiate_inner(&contract_addr, *code_id, &origin, msg, funds)?,
                             contract_addr,
@@ -135,9 +159,8 @@ impl Model {
                     }
                     _ => unimplemented!(),
                 },
-                CosmosMsg::Bank(bank_msg) => {
+                CosmosMsg::Bank(_bank_msg) => {
                     // if bank fails, revert the entire transaction
-                    self.bank.borrow_mut().execute(&origin, bank_msg)?;
                     unimplemented!()
                 }
                 _ => unimplemented!(),
@@ -184,7 +207,7 @@ impl Model {
     /// TODO: fix instantiate so that it generates the address automatically
     pub fn instantiate(&mut self, code_id: u64, msg: &[u8], funds: &[Coin]) -> Result<(), Error> {
         let eoa = self.eoa.clone();
-        let contract_addr = Addr::unchecked("");
+        let contract_addr = self.generate_address(code_id)?;
         self.instantiate_inner(&contract_addr, code_id, &Addr::unchecked(eoa), msg, funds)?;
         self.update_block();
         Ok(())
@@ -503,7 +526,5 @@ mod test {
     }
 
     #[test]
-    fn test_complex_submessages() {
-
-    }
+    fn test_complex_submessages() {}
 }
