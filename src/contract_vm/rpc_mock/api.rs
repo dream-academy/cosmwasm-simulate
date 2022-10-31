@@ -64,6 +64,7 @@ impl BackendApi for RpcMockApi {
                 );
             }
         };
+        // canonical addresses can either be 20 bytes or 32 bytes
         let out = Vec::<u8>::from_base32(&base32_vec).unwrap();
         (Ok(out), GasInfo::free())
     }
@@ -72,7 +73,8 @@ impl BackendApi for RpcMockApi {
         let bech32_prefix = unsafe {
             String::from_utf8_unchecked(self.bech32_prefix[0..self.bech32_prefix_len].to_vec())
         };
-        if canonical.len() != self.canonical_length {
+        // canonical addresses can either be 20 bytes or 32 bytes
+        if canonical.len() > self.canonical_length {
             return (
                 Err(BackendError::user_err(
                     "Invalid input: canonical address length not correct",
@@ -91,7 +93,7 @@ impl BackendApi for RpcMockApi {
         } else {
             (
                 Err(BackendError::user_err(
-                    "Invalid input: canonical address not decodable",
+                    "Invalid input: canonical address not encodable",
                 )),
                 GasInfo::free(),
             )

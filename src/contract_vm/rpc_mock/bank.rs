@@ -19,7 +19,7 @@ impl Bank {
         })
     }
 
-    fn get_balance(&mut self, owner: &Addr, denom: &str) -> Result<Uint128, Error> {
+    pub fn get_balance(&mut self, owner: &Addr, denom: &str) -> Result<Uint128, Error> {
         if !self.balances.contains_key(owner) {
             let mut client = self.client.borrow_mut();
             self.balances.insert(
@@ -39,7 +39,7 @@ impl Bank {
         }
     }
 
-    fn get_balances(&mut self, owner: &Addr) -> Result<Vec<Coin>, Error> {
+    pub fn get_balances(&mut self, owner: &Addr) -> Result<Vec<Coin>, Error> {
         if !self.balances.contains_key(owner) {
             let mut client = self.client.borrow_mut();
             self.balances.insert(
@@ -63,7 +63,7 @@ impl Bank {
             .collect())
     }
 
-    fn set_balance(&mut self, owner: &Addr, denom: &str, balance: Uint128) -> Result<(), Error> {
+    pub fn set_balance(&mut self, owner: &Addr, denom: &str, balance: Uint128) -> Result<(), Error> {
         self.balances
             .entry(owner.clone())
             .or_insert_with(HashMap::new)
@@ -119,20 +119,20 @@ impl Bank {
 
     /// queries the bank structure maintained in-memory
     /// if the in-memory db is not capable of handling the query, use the RPC client
-    pub fn query(&mut self, bank_query: BankQuery) -> Result<Binary, Error> {
+    pub fn query(&mut self, bank_query: &BankQuery) -> Result<Binary, Error> {
         match bank_query {
             BankQuery::Balance { address, denom } => {
                 let balance = self.get_balance(&Addr::unchecked(address), &denom)?;
                 let response = BalanceResponse {
                     amount: Coin {
-                        denom,
+                        denom: denom.to_string(),
                         amount: balance,
                     },
                 };
                 Ok(to_binary(&response).map_err(|e| Error::std_error(e))?)
             }
             BankQuery::AllBalances { address } => {
-                let balances = { panic!("") };
+                let balances = self.get_balances(&Addr::unchecked(address))?;
                 let response = AllBalanceResponse { amount: balances };
                 Ok(to_binary(&response).map_err(|e| Error::std_error(e))?)
             }

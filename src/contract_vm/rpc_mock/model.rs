@@ -3,7 +3,10 @@ use crate::contract_vm::rpc_mock::{
 };
 use crate::contract_vm::Error;
 
-use cosmwasm_std::{Addr, BankMsg, Coin, ContractInfo, CosmosMsg, Env, Timestamp, WasmMsg};
+use cosmwasm_std::{
+    from_slice, Addr, Binary, Coin, ContractInfo, CosmosMsg, Env, QueryRequest, Timestamp, WasmMsg,
+    WasmQuery, BankMsg,
+};
 use cosmwasm_vm::{Backend, InstanceOptions, Storage};
 use std::cell::{RefCell, UnsafeCell};
 use std::collections::HashMap;
@@ -92,7 +95,9 @@ impl Model {
 
     fn execute(&mut self, contract_addr: &Addr, msg: &[u8], funds: &[Coin]) -> Result<(), Error> {
         let eoa = self.eoa.clone();
-        self.execute_inner(contract_addr, &Addr::unchecked(eoa), msg, funds)
+        self.execute_inner(contract_addr, &Addr::unchecked(eoa), msg, funds)?;
+        self.update_block();
+        Ok(())
     }
 
     fn execute_inner(
@@ -103,10 +108,20 @@ impl Model {
         funds: &[Coin],
     ) -> Result<(), Error> {
         let env = self.env(contract_addr)?;
+
+        // create instance if instance is not materialized
         let instances = unsafe { self.instances.get().as_mut().unwrap() };
         if !instances.contains_key(&contract_addr) {
             self.create_instance(contract_addr)?;
         }
+
+        // transfer coins
+        let mut bank = self.bank.borrow_mut();
+        let bank_msg = BankMsg::Send { to_address: contract_addr.to_string(), amount: funds.to_vec() };
+        bank.execute(sender, &bank_msg)?;
+        drop(bank);
+
+        // execute contract code
         let instance = instances.get_mut(contract_addr).unwrap();
         let response = instance.execute(&env, msg, &sender, funds)?;
         for resp in response.messages {
@@ -137,9 +152,22 @@ impl Model {
                 _ => unimplemented!(),
             }
         }
-        drop(instances);
-        self.update_block();
         Ok(())
+    }
+
+    /// for now, only support WASM queries
+    fn query_wasm(&mut self, contract_addr: &Addr, msg: &[u8]) -> Result<Binary, Error> {
+        let env = self.env(contract_addr)?;
+        let instances = unsafe { self.instances.get().as_mut().unwrap() };
+        if !instances.contains_key(&contract_addr) {
+            self.create_instance(contract_addr)?;
+        }
+        let instance = instances.get_mut(contract_addr).unwrap();
+        let wasm_query = WasmQuery::Smart {
+            contract_addr: contract_addr.to_string(),
+            msg: Binary::from(msg),
+        };
+        instance.query(&env, &wasm_query)
     }
 
     /// emulate blockchain block creation
@@ -192,9 +220,9 @@ impl Model {
 #[cfg(test)]
 mod test {
 
-    use cosmwasm_std::{Addr, Coin, Uint128};
-    use serde::{Deserialize, Serialize};
+    use cosmwasm_std::{Addr, Coin, Uint128, BankQuery, BalanceResponse};
     use serde_json::json;
+    use std::str::FromStr;
 
     use crate::contract_vm::rpc_mock::model::Model;
 
@@ -206,11 +234,11 @@ mod test {
         "wasm124v54ngky9wxhx87t252x4xfgujmdsu7uhjdugtkkqt39nld0e6st7e64h";
 
     #[test]
-    fn test_swap() {
+    fn test_swap_basic() {
         use serde_json::Value::Null;
         let mut model = Model::new(MALAGA_RPC_URL, Some(MALAGA_BLOCK_NUMBER)).unwrap();
         let prev_block_num = model.block_number;
-        let msg_json = json!({
+        let swap_msg_json = json!({
             "swap": {
             "offer_asset": {
                 "info": { "native_token": { "denom": "umlg" } },
@@ -221,15 +249,55 @@ mod test {
             "to": Null
             }
         });
-        let msg_bytes = serde_json::to_string(&msg_json).unwrap();
+        let swap_msg = serde_json::to_string(&swap_msg_json).unwrap();
         let funds = vec![Coin {
             denom: "umlg".to_string(),
             amount: Uint128::new(10),
         }];
         let pair_address = Addr::unchecked(PAIR_ADDRESS);
-        let _ = model
-            .execute(&pair_address, msg_bytes.as_bytes(), &funds)
+        let token_address = Addr::unchecked(TOKEN_ADDRESS);
+        let my_address = model.eoa.clone();
+
+        // balance before the swap
+        let query_balance_msg_json = json!({
+            "balance": {"address": my_address.clone(), }
+        });
+        let query_balance_msg = serde_json::to_string(&query_balance_msg_json).unwrap();
+        let resp = model
+            .query_wasm(&token_address, query_balance_msg.as_bytes())
             .unwrap();
+        let resp_json: serde_json::Value = serde_json::from_slice(resp.as_slice()).unwrap();
+        let token_balance_before = u128::from_str(resp_json["balance"].as_str().unwrap()).unwrap();
+        let bank_query = BankQuery::Balance {
+            address: my_address.clone(),
+            denom: "umlg".to_string(),
+        };
+        let resp = model.bank.borrow_mut().query(&bank_query).unwrap();
+        let resp_bank: BalanceResponse = serde_json::from_slice(resp.as_slice()).unwrap();
+        let umlg_balance_before: u128 = resp_bank.amount.amount.into();
+
+        // execute the swap transaction
+        let _ = model
+            .execute(&pair_address, swap_msg.as_bytes(), &funds)
+            .unwrap();
+
+        // check the results
+        // block number incremented
         assert_eq!(model.block_number, prev_block_num + 1);
+
+        let query_balance_msg = serde_json::to_string(&query_balance_msg_json).unwrap();
+        let resp = model
+            .query_wasm(&token_address, query_balance_msg.as_bytes())
+            .unwrap();
+        let resp_json: serde_json::Value = serde_json::from_slice(resp.as_slice()).unwrap();
+        let token_balance_after = u128::from_str(resp_json["balance"].as_str().unwrap()).unwrap();
+        let resp = model.bank.borrow_mut().query(&bank_query).unwrap();
+        let resp_bank: BalanceResponse = serde_json::from_slice(resp.as_slice()).unwrap();
+        let umlg_balance_after: u128 = resp_bank.amount.amount.into();
+
+        // token and umlg balance as expected
+        assert_eq!(token_balance_after - token_balance_before, 9);
+        assert_eq!(umlg_balance_before - umlg_balance_after, 10);
+
     }
 }

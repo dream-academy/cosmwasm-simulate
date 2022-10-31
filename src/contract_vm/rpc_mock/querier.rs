@@ -21,7 +21,7 @@ impl Querier for RpcMockQuerier {
     fn query_raw(
         &self,
         request: &[u8],
-        gas_limit: u64,
+        _gas_limit: u64,
     ) -> BackendResult<SystemResult<ContractResult<Binary>>> {
         let request: QueryRequest<()> = match from_slice(request) {
             Ok(v) => v,
@@ -35,7 +35,7 @@ impl Querier for RpcMockQuerier {
         match request {
             QueryRequest::Bank(bank_query) => {
                 let mut bank = self.bank.borrow_mut();
-                match bank.query(bank_query) {
+                match bank.query(&bank_query) {
                     Ok(resp) => {
                         (
                             // wait, is this correct?
