@@ -2,15 +2,26 @@ use crate::contract_vm::rpc_mock::CwRpcClient;
 use crate::contract_vm::Error;
 use cosmwasm_std::{
     to_binary, Addr, AllBalanceResponse, BalanceResponse, BankMsg, BankQuery, Binary, Coin,
-    ContractResult, Uint128,
+    ContractResult, Event, Response, Uint128,
 };
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
-use tendermint_rpc::Response;
 
 pub struct Bank {
     // address -> ( denom -> amount )
     balances: HashMap<Addr, HashMap<String, Uint128>>,
     client: Rc<RefCell<CwRpcClient>>,
+}
+
+fn coin_spent_event(sender: &Addr, amount: Uint128, denom: &str) -> Event {
+    Event::new("coin_spent")
+        .add_attribute("spender", sender)
+        .add_attribute("amount", format!("{}{}", amount, denom))
+}
+
+fn coin_received_event(receiver: &Addr, amount: Uint128, denom: &str) -> Event {
+    Event::new("coin_received")
+        .add_attribute("receiver", receiver)
+        .add_attribute("amount", format!("{}{}", amount, denom))
 }
 
 impl Bank {
@@ -78,39 +89,59 @@ impl Bank {
         Ok(())
     }
 
-    fn send_internal(&mut self, src: &Addr, dst: &Addr, amount: &[Coin]) -> Result<(), Error> {
+    fn send_internal(
+        &mut self,
+        src: &Addr,
+        dst: &Addr,
+        amount: &[Coin],
+    ) -> Result<ContractResult<Response>, Error> {
+        let mut events = Vec::new();
         for coin in amount.iter() {
             let src_amount = self.get_balance(src, &coin.denom)?;
             let dst_amount = self.get_balance(dst, &coin.denom)?;
             if src_amount >= coin.amount {
                 self.set_balance(src, &coin.denom, src_amount - coin.amount)?;
                 self.set_balance(dst, &coin.denom, dst_amount + coin.amount)?;
+                events.push(coin_spent_event(src, coin.amount, &coin.denom));
+                events.push(coin_received_event(dst, coin.amount, &coin.denom));
             } else {
-                return Err(Error::bank_error(&format!(
+                return Ok(ContractResult::Err(format!(
                     "insufficient balance (owner: {}, balance: {}, amount: {})",
                     src, src_amount, coin.amount
                 )));
             }
         }
-        Ok(())
+        // TODO: make this more verbose
+        let response = Response::new().add_events(events);
+        Ok(ContractResult::Ok(response))
     }
 
-    fn burn_internal(&mut self, src: &Addr, amount: &[Coin]) -> Result<(), Error> {
+    fn burn_internal(
+        &mut self,
+        src: &Addr,
+        amount: &[Coin],
+    ) -> Result<ContractResult<Response>, Error> {
         for coin in amount.iter() {
             let src_amount = self.get_balance(src, &coin.denom)?;
             if src_amount >= coin.amount {
                 self.set_balance(src, &coin.denom, src_amount - coin.amount)?;
             } else {
-                return Err(Error::bank_error(&format!(
+                return Ok(ContractResult::Err(format!(
                     "insufficient balance (owner: {}, balance: {}, amount: {})",
                     src, src_amount, coin.amount
                 )));
             }
         }
-        Ok(())
+        // TODO: make this more verbose
+        let response = Response::new();
+        Ok(ContractResult::Ok(response))
     }
 
-    pub fn execute(&mut self, sender: &Addr, bank_msg: &BankMsg) -> Result<(), Error> {
+    pub fn execute(
+        &mut self,
+        sender: &Addr,
+        bank_msg: &BankMsg,
+    ) -> Result<ContractResult<Response>, Error> {
         match bank_msg {
             BankMsg::Send { to_address, amount } => {
                 let dst = Addr::unchecked(to_address);

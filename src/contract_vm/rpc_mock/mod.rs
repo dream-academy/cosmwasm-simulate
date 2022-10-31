@@ -1,5 +1,6 @@
 mod api;
 mod bank;
+mod debug_log;
 mod instance;
 mod model;
 mod querier;
@@ -8,6 +9,7 @@ mod storage;
 
 pub use api::RpcMockApi;
 pub use bank::Bank;
+pub use debug_log::DebugLog;
 pub use instance::RpcContractInstance;
 pub use model::RpcBackend;
 pub use querier::RpcMockQuerier;

@@ -1,6 +1,6 @@
-use crate::contract_vm::rpc_mock::api::{canonical_to_human, human_to_canonical};
+use crate::contract_vm::rpc_mock::api::canonical_to_human;
 use crate::contract_vm::rpc_mock::{
-    Bank, CwRpcClient, RpcContractInstance, RpcMockApi, RpcMockQuerier, RpcMockStorage,
+    Bank, CwRpcClient, DebugLog, RpcContractInstance, RpcMockApi, RpcMockQuerier, RpcMockStorage,
 };
 use crate::contract_vm::Error;
 
@@ -118,12 +118,17 @@ impl Model {
         &mut self,
         instance: &mut RpcContractInstance,
         response: &Response,
+        debug_log: &mut DebugLog,
     ) -> Result<ContractResult<Response>, Error> {
         let origin = instance.address();
 
         // last_response is the response of the latest execution
         // If there are no submessages, this will be returned. Otherwise, response from the submessages will be returned
-        let mut last_response = ContractResult::Ok(response.clone());
+        if response.messages.len() == 0 {
+            return Ok(ContractResult::Ok(response.clone()));
+        }
+        // this will be overwritten at least once
+        let mut last_response = ContractResult::Ok(Response::new());
         // otherwise, execute the submessages
         for sub_msg in response.messages.iter() {
             let (response, target_addr) = match &sub_msg.msg {
@@ -142,7 +147,14 @@ impl Model {
                         // generate contract address automatically
                         let contract_addr = self.generate_address(*code_id)?;
                         (
-                            self.instantiate_inner(&contract_addr, *code_id, &origin, msg, funds)?,
+                            self.instantiate_inner(
+                                &contract_addr,
+                                *code_id,
+                                &origin,
+                                msg,
+                                funds,
+                                debug_log,
+                            )?,
                             contract_addr,
                         )
                     }
@@ -153,15 +165,32 @@ impl Model {
                     } => {
                         let target_addr = Addr::unchecked(target_addr);
                         (
-                            self.execute_inner(&target_addr, &origin, msg.as_slice(), funds)?,
+                            self.execute_inner(
+                                &target_addr,
+                                &origin,
+                                msg.as_slice(),
+                                funds,
+                                debug_log,
+                            )?,
                             target_addr,
                         )
                     }
                     _ => unimplemented!(),
                 },
-                CosmosMsg::Bank(_bank_msg) => {
+                CosmosMsg::Bank(bank_msg) => {
                     // if bank fails, revert the entire transaction
-                    unimplemented!()
+                    let mut bank = self.bank.borrow_mut();
+                    match bank.execute(&origin, &bank_msg)? {
+                        ContractResult::Ok(r) => {
+                            debug_log.append(&r);
+                            last_response = ContractResult::Ok(r);
+                        }
+                        ContractResult::Err(e) => {
+                            debug_log.set_err_msg(&e);
+                            return Ok(ContractResult::Err(e));
+                        }
+                    };
+                    continue;
                 }
                 _ => unimplemented!(),
             };
@@ -184,12 +213,14 @@ impl Model {
                         ContractResult::Err(e) => SubMsgResult::Err(e),
                     },
                 };
-                let response = instance.reply(&env, &reply)?;
-                if response.is_err() {
+                let maybe_response = instance.reply(&env, &reply)?;
+                if maybe_response.is_err() {
                     // propagate error. instance.reply need not error handling
-                    return Ok(response);
+                    return Ok(maybe_response);
                 } else {
-                    self.handle_response(instance, &response.unwrap())?
+                    let response = maybe_response.unwrap();
+                    debug_log.append(&response);
+                    self.handle_response(instance, &response, debug_log)?
                 }
             }
             // if reply is not called, but the current result is an error, propagate the error
@@ -198,19 +229,32 @@ impl Model {
             }
             // otherwise, recursively handle the submessages
             else {
-                self.handle_response(instance, &response.unwrap())?
+                self.handle_response(instance, &response.unwrap(), debug_log)?
             };
         }
         Ok(last_response)
     }
 
     /// TODO: fix instantiate so that it generates the address automatically
-    pub fn instantiate(&mut self, code_id: u64, msg: &[u8], funds: &[Coin]) -> Result<(), Error> {
+    pub fn instantiate(
+        &mut self,
+        code_id: u64,
+        msg: &[u8],
+        funds: &[Coin],
+    ) -> Result<DebugLog, Error> {
         let eoa = self.eoa.clone();
+        let mut debug_log = DebugLog::new();
         let contract_addr = self.generate_address(code_id)?;
-        self.instantiate_inner(&contract_addr, code_id, &Addr::unchecked(eoa), msg, funds)?;
+        self.instantiate_inner(
+            &contract_addr,
+            code_id,
+            &Addr::unchecked(eoa),
+            msg,
+            funds,
+            &mut debug_log,
+        )?;
         self.update_block();
-        Ok(())
+        Ok(debug_log)
     }
 
     fn instantiate_inner(
@@ -221,6 +265,7 @@ impl Model {
         sender: &Addr,
         msg: &[u8],
         funds: &[Coin],
+        debug_log: &mut DebugLog,
     ) -> Result<ContractResult<Response>, Error> {
         // transfer coins
         let mut bank = self.bank.borrow_mut();
@@ -228,7 +273,15 @@ impl Model {
             to_address: contract_addr.to_string(),
             amount: funds.to_vec(),
         };
-        bank.execute(sender, &bank_msg)?;
+        match bank.execute(sender, &bank_msg)? {
+            ContractResult::Ok(r) => {
+                debug_log.append(&r);
+            }
+            ContractResult::Err(e) => {
+                debug_log.set_err_msg(&e);
+                return Ok(ContractResult::Err(e));
+            }
+        };
         drop(bank);
 
         let deps = self.new_mock(contract_addr)?;
@@ -250,12 +303,16 @@ impl Model {
         let env = self.env(contract_addr)?;
         // propagate contract error downwards
         let response = match instance.instantiate(&env, msg, &sender, funds)? {
-            ContractResult::Ok(r) => r,
+            ContractResult::Ok(r) => {
+                debug_log.append(&r);
+                r
+            }
             ContractResult::Err(e) => {
+                debug_log.set_err_msg(&e);
                 return Ok(ContractResult::Err(e));
             }
         };
-        let response = self.handle_response(&mut instance, &response)?;
+        let response = self.handle_response(&mut instance, &response, debug_log)?;
         let instances = unsafe { self.instances.get().as_mut().unwrap() };
         instances.insert(contract_addr.clone(), instance);
         Ok(response)
@@ -266,11 +323,18 @@ impl Model {
         contract_addr: &Addr,
         msg: &[u8],
         funds: &[Coin],
-    ) -> Result<(), Error> {
+    ) -> Result<DebugLog, Error> {
+        let mut debug_log = DebugLog::new();
         let eoa = self.eoa.clone();
-        self.execute_inner(contract_addr, &Addr::unchecked(eoa), msg, funds)?;
+        self.execute_inner(
+            contract_addr,
+            &Addr::unchecked(eoa),
+            msg,
+            funds,
+            &mut debug_log,
+        )?;
         self.update_block();
-        Ok(())
+        Ok(debug_log)
     }
 
     fn execute_inner(
@@ -279,6 +343,7 @@ impl Model {
         sender: &Addr,
         msg: &[u8],
         funds: &[Coin],
+        debug_log: &mut DebugLog,
     ) -> Result<ContractResult<Response>, Error> {
         let env = self.env(contract_addr)?;
 
@@ -294,19 +359,31 @@ impl Model {
             to_address: contract_addr.to_string(),
             amount: funds.to_vec(),
         };
-        bank.execute(sender, &bank_msg)?;
+        match bank.execute(sender, &bank_msg)? {
+            ContractResult::Ok(r) => {
+                debug_log.append(&r);
+            }
+            ContractResult::Err(e) => {
+                debug_log.set_err_msg(&e);
+                return Ok(ContractResult::Err(e));
+            }
+        };
         drop(bank);
 
         // execute contract code
         let mut instance = instances.get_mut(contract_addr).unwrap();
         // propagate contract error downwards
         let response = match instance.execute(&env, msg, &sender, funds)? {
-            ContractResult::Ok(r) => r,
+            ContractResult::Ok(r) => {
+                debug_log.append(&r);
+                r
+            }
             ContractResult::Err(e) => {
+                debug_log.set_err_msg(&e);
                 return Ok(ContractResult::Err(e));
             }
         };
-        self.handle_response(&mut instance, &response)
+        self.handle_response(&mut instance, &response, debug_log)
     }
 
     /// for now, only support WASM queries
@@ -451,12 +528,14 @@ mod test {
     use crate::contract_vm::rpc_mock::model::Model;
 
     const MALAGA_RPC_URL: &'static str = "https://rpc.malaga-420.cosmwasm.com:443";
-    const MALAGA_BLOCK_NUMBER: u64 = 2246678;
-    const PAIR_ADDRESS_MALAGA: &'static str =
+    const MALAGA_BLOCK_NUMBER: u64 = 2326474;
+    const PAIR_ADDRESS_MALAGA: &str =
         "wasm15le5evw4regnwf9lrjnpakr2075fcyp4n4yzpelvqcuevzkw2lss46hslz";
-    const TOKEN_ADDRESS_MALAGA: &'static str =
+    const TOKEN_ADDRESS_MALAGA: &str =
         "wasm124v54ngky9wxhx87t252x4xfgujmdsu7uhjdugtkkqt39nld0e6st7e64h";
-    const MAINNET_RPC_URL: &'static str = "http://175.207.29.212:26656";
+    const VAULT_ADDRESS: &str = "wasm1fedmcgtsvmymyr6jssgar0h7uhhcuxhr7ygjjw5q2epgzef3jy0svcr5jx";
+    const VAULT_ROUTER_ADDRESS: &str =
+        "wasm1xp8prmlsx9erdkrk43qjtrw54755zwm9f4x52m8k3an6jgcaldpqpmsd23";
 
     #[test]
     fn test_swap_basic_testnet() {
@@ -526,5 +605,29 @@ mod test {
     }
 
     #[test]
-    fn test_complex_submessages() {}
+    fn test_flashloan() {
+        let mut model = Model::new(MALAGA_RPC_URL, Some(MALAGA_BLOCK_NUMBER), "wasm").unwrap();
+        let _vault_address = Addr::unchecked(VAULT_ADDRESS);
+        let vault_router_address = Addr::unchecked(VAULT_ROUTER_ADDRESS);
+        let _my_address = model.eoa.clone();
+
+        let loan_msg_json = json!({
+            "flash_loan": {
+                "assets": [{
+                    "info": { "native_token": { "denom": "umlg" } },
+                    "amount": "10"
+                }],
+                "msgs": [],
+            }
+        });
+        let loan_msg = serde_json::to_string(&loan_msg_json).unwrap();
+        let prev_block_num = model.block_number;
+        // execute the swap transaction
+        let log = model
+            .execute(&vault_router_address, loan_msg.as_bytes(), &vec![])
+            .unwrap();
+
+        assert_eq!(model.block_number, prev_block_num + 1);
+        assert_eq!(log.err_msg, None);
+    }
 }

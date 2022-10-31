@@ -1,9 +1,10 @@
 use crate::contract_vm::rpc_mock::{Bank, CwRpcClient, RpcContractInstance};
 use cosmwasm_std::{
-    from_slice, Addr, Binary, BlockInfo, ContractInfo, ContractResult, Env, QueryRequest,
-    SystemResult, Timestamp, WasmQuery,
+    from_binary, from_slice, to_binary, Addr, Binary, BlockInfo, ContractInfo, ContractResult, Env,
+    QueryRequest, SystemResult, Timestamp, WasmQuery,
 };
 use cosmwasm_vm::{BackendError, BackendResult, GasInfo, Querier};
+use serde::{Deserialize, Serialize};
 
 use std::cell::{RefCell, UnsafeCell};
 use std::collections::HashMap;
@@ -15,6 +16,18 @@ pub struct RpcMockQuerier {
     client: Rc<RefCell<CwRpcClient>>,
     bank: Rc<RefCell<Bank>>,
     instances: Rc<UnsafeCell<Instances>>,
+}
+
+const PRINTER_ADDR: &str = "supergodprinter";
+
+#[derive(Serialize, Deserialize)]
+struct PrintRequest {
+    msg: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct PrintResponse {
+    ack: bool,
 }
 
 impl Querier for RpcMockQuerier {
@@ -50,17 +63,29 @@ impl Querier for RpcMockQuerier {
                 }
             }
             QueryRequest::Wasm(wasm_query) => {
-                let mut instances = unsafe { self.instances.get().as_mut().unwrap() };
+                let instances = unsafe { self.instances.get().as_mut().unwrap() };
                 let contract_addr = Addr::unchecked(match &wasm_query {
                     WasmQuery::ContractInfo { contract_addr } => contract_addr,
                     WasmQuery::Raw { contract_addr, .. } => contract_addr,
                     WasmQuery::Smart { contract_addr, .. } => contract_addr,
                     _ => unimplemented!(),
                 });
-                if let Some(instance) = instances.get_mut(&contract_addr) {
+                if contract_addr.as_str() == PRINTER_ADDR {
+                    match wasm_query {
+                        WasmQuery::Smart { contract_addr: _, msg } => {
+                            let msg: PrintRequest = from_binary(&msg).unwrap();
+                            println!("[*] print: {}", msg.msg);
+                            let resp = to_binary(&PrintResponse { ack: true }).unwrap();
+                            (Ok(SystemResult::Ok(ContractResult::Ok(resp))), GasInfo::free())
+                        }
+                        _ => {
+                            panic!("invalid query to printer");
+                        }
+                    }
+                } else if let Some(instance) = instances.get_mut(&contract_addr) {
                     let env = Env {
                         block: BlockInfo {
-                            // fix this later!!
+                            // TODO: fix
                             height: 0,
                             time: Timestamp::from_nanos(0),
                             chain_id: "chaind".to_string(),
@@ -85,7 +110,7 @@ impl Querier for RpcMockQuerier {
                     let mut client = self.client.borrow_mut();
                     match &wasm_query {
                         WasmQuery::ContractInfo { contract_addr } => {
-                            panic!("")
+                            unimplemented!()
                         }
                         WasmQuery::Raw { contract_addr, key } => {
                             let states = match client.query_wasm_contract_all(contract_addr) {
