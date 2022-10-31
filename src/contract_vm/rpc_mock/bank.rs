@@ -63,7 +63,12 @@ impl Bank {
             .collect())
     }
 
-    pub fn set_balance(&mut self, owner: &Addr, denom: &str, balance: Uint128) -> Result<(), Error> {
+    pub fn set_balance(
+        &mut self,
+        owner: &Addr,
+        denom: &str,
+        balance: Uint128,
+    ) -> Result<(), Error> {
         self.balances
             .entry(owner.clone())
             .or_insert_with(HashMap::new)

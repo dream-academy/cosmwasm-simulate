@@ -2,9 +2,13 @@ use cosmwasm_std::{
     to_binary, Addr, Binary, Coin, ContractInfo, ContractResult, Env, MessageInfo, QueryResponse,
     Response, Timestamp, WasmQuery,
 };
-use cosmwasm_vm::{call_execute, call_instantiate, call_query, Instance, Storage, VmError};
+use cosmwasm_vm::{
+    call_execute, call_instantiate, call_query, Backend, Instance, Storage, VmError,
+};
 
-use crate::contract_vm::rpc_mock::{querier::RpcMockQuerier, RpcMockApi, RpcMockStorage};
+use crate::contract_vm::rpc_mock::{
+    querier::RpcMockQuerier, RpcBackend, RpcMockApi, RpcMockStorage,
+};
 use crate::contract_vm::Error;
 
 type RpcInstance = Instance<RpcMockApi, RpcMockStorage, RpcMockQuerier>;
@@ -23,6 +27,28 @@ impl RpcContractInstance {
             contract_info,
             instance,
         }
+    }
+
+    pub fn instantiate(
+        &mut self,
+        env: &Env,
+        msg: &[u8],
+        sender: &Addr,
+        funds: &[Coin],
+    ) -> Result<Response, Error> {
+        let info = MessageInfo {
+            sender: sender.clone(),
+            funds: funds.to_vec(),
+        };
+        let handle_result = call_instantiate(&mut self.instance, env, &info, msg)
+            .map_err(|e| Error::vm_error(e))?;
+        let response = match handle_result {
+            ContractResult::Ok(r) => r,
+            ContractResult::Err(e) => {
+                return Err(Error::vm_error(e));
+            }
+        };
+        Ok(response)
     }
 
     pub fn execute(
@@ -85,5 +111,20 @@ impl RpcContractInstance {
             }
             _ => unimplemented!(),
         }
+    }
+
+    pub fn recycle(self) -> RpcBackend {
+        // this cannot panic, because all instances have storage and api
+        self.instance.recycle().unwrap()
+    }
+
+    pub fn storage_write(&mut self, key: &[u8], value: &[u8]) -> Result<(), Error> {
+        self.instance
+            .with_storage(|s| {
+                let (b, _) = s.set(key, value);
+                b.map_err(|e| VmError::BackendErr { source: e })
+            })
+            .map_err(|e| Error::vm_error(e))?;
+        Ok(())
     }
 }

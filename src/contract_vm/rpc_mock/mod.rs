@@ -10,6 +10,7 @@ mod storage;
 pub use api::RpcMockApi;
 pub use bank::Bank;
 pub use instance::RpcContractInstance;
+pub use model::RpcBackend;
 pub use querier::RpcMockQuerier;
 pub use rpc::CwRpcClient;
 pub use storage::RpcMockStorage;

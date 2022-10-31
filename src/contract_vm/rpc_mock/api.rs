@@ -57,16 +57,28 @@ impl BackendApi for RpcMockApi {
                     Err(BackendError::UserErr {
                         msg: format!(
                             "Invalid input: human address is not bech32 decodable: {}",
-                            human
+                            e
                         ),
                     }),
                     GasInfo::free(),
                 );
             }
         };
-        // canonical addresses can either be 20 bytes or 32 bytes
-        let out = Vec::<u8>::from_base32(&base32_vec).unwrap();
-        (Ok(out), GasInfo::free())
+        if hrp != bech32_prefix {
+            (
+                Err(BackendError::UserErr {
+                    msg: format!(
+                        "Invalid input: human address has invalid bech32 prefix: {}",
+                        hrp
+                    ),
+                }),
+                GasInfo::free(),
+            )
+        } else {
+            // canonical addresses can either be 20 bytes or 32 bytes
+            let out = Vec::<u8>::from_base32(&base32_vec).unwrap();
+            (Ok(out), GasInfo::free())
+        }
     }
 
     fn human_address(&self, canonical: &[u8]) -> BackendResult<String> {

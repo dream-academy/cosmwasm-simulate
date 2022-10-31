@@ -536,7 +536,5 @@ mod tests {
             .unwrap();
         // wasm header is \x00asm, for some contracts it may be gzip
         assert_eq!(&wasm_code[0..4], &vec![0, 97, 115, 109]);
-        let wasm_code = client.query_wasm_contract_code(1).unwrap();
-        println!("{:?}", &wasm_code[0..4]);
     }
 }
