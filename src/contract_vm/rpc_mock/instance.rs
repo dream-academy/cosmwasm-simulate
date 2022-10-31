@@ -1,9 +1,9 @@
 use cosmwasm_std::{
-    to_binary, Addr, Binary, Coin, ContractInfo, ContractResult, Env, MessageInfo, QueryResponse,
-    Response, Timestamp, WasmQuery,
+    to_binary, Addr, Binary, Coin, ContractInfo, ContractResult, CustomMsg, Env, MessageInfo,
+    QueryResponse, Reply, Response, SubMsgResult, Timestamp, WasmQuery,
 };
 use cosmwasm_vm::{
-    call_execute, call_instantiate, call_query, Backend, Instance, Storage, VmError,
+    call_execute, call_instantiate, call_query, call_reply, Backend, Instance, Storage, VmError,
 };
 
 use crate::contract_vm::rpc_mock::{
@@ -29,26 +29,25 @@ impl RpcContractInstance {
         }
     }
 
+    pub fn address(&self) -> Addr {
+        self.contract_info.address.clone()
+    }
+
     pub fn instantiate(
         &mut self,
         env: &Env,
         msg: &[u8],
         sender: &Addr,
         funds: &[Coin],
-    ) -> Result<Response, Error> {
+    ) -> Result<ContractResult<Response>, Error> {
         let info = MessageInfo {
             sender: sender.clone(),
             funds: funds.to_vec(),
         };
-        let handle_result = call_instantiate(&mut self.instance, env, &info, msg)
-            .map_err(|e| Error::vm_error(e))?;
-        let response = match handle_result {
-            ContractResult::Ok(r) => r,
-            ContractResult::Err(e) => {
-                return Err(Error::vm_error(e));
-            }
-        };
-        Ok(response)
+        Ok(
+            call_instantiate(&mut self.instance, env, &info, msg)
+                .map_err(|e| Error::vm_error(e))?,
+        )
     }
 
     pub fn execute(
@@ -57,20 +56,16 @@ impl RpcContractInstance {
         msg: &[u8],
         sender: &Addr,
         funds: &[Coin],
-    ) -> Result<Response, Error> {
+    ) -> Result<ContractResult<Response>, Error> {
         let info = MessageInfo {
             sender: sender.clone(),
             funds: funds.to_vec(),
         };
-        let handle_result: ContractResult<Response> =
-            call_execute(&mut self.instance, env, &info, msg).map_err(|e| Error::vm_error(e))?;
-        let response = match handle_result {
-            ContractResult::Ok(r) => r,
-            ContractResult::Err(e) => {
-                return Err(Error::vm_error(e));
-            }
-        };
-        Ok(response)
+        Ok(call_execute(&mut self.instance, env, &info, msg).map_err(|e| Error::vm_error(e))?)
+    }
+
+    pub fn reply(&mut self, env: &Env, msg: &Reply) -> Result<ContractResult<Response>, Error> {
+        Ok(call_reply(&mut self.instance, env, msg).map_err(|e| Error::vm_error(e))?)
     }
 
     pub fn query(&mut self, env: &Env, wasm_query: &WasmQuery) -> Result<Binary, Error> {

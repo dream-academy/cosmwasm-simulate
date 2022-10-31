@@ -1,6 +1,5 @@
 mod api;
 mod bank;
-mod code;
 mod instance;
 mod model;
 mod querier;

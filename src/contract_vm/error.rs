@@ -41,9 +41,11 @@ impl Error {
     pub fn std_error<T: ToString>(msg: T) -> Self {
         Self::StdError(msg.to_string())
     }
+
     pub fn io_error<T: ToString>(msg: T) -> Self {
         Self::IoError(msg.to_string())
     }
+
     pub fn bank_error<T: ToString>(msg: T) -> Self {
         Self::BankError(msg.to_string())
     }

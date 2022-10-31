@@ -4,12 +4,13 @@ use crate::contract_vm::rpc_mock::{
 use crate::contract_vm::Error;
 
 use cosmwasm_std::{
-    from_slice, Addr, BankMsg, Binary, Coin, ContractInfo, CosmosMsg, Env, Response, Timestamp,
-    Uint128, WasmMsg, WasmQuery,
+    Addr, BankMsg, Binary, Coin, ContractInfo, ContractResult, CosmosMsg, Env, Reply, ReplyOn,
+    Response, SubMsgResponse, SubMsgResult, Timestamp, Uint128, WasmMsg, WasmQuery,
 };
 use cosmwasm_vm::{call_instantiate, Backend, InstanceOptions, Storage};
 use std::cell::{RefCell, UnsafeCell};
 use std::collections::HashMap;
+use std::ops::Sub;
 use std::rc::Rc;
 
 pub type RpcBackend = Backend<RpcMockApi, RpcMockStorage, RpcMockQuerier>;
@@ -47,7 +48,7 @@ fn maybe_unzip(input: Vec<u8>) -> Result<Vec<u8>, Error> {
 }
 
 impl Model {
-    pub fn new(rpc_url: &str, block_number: Option<u64>) -> Result<Self, Error> {
+    pub fn new(rpc_url: &str, block_number: Option<u64>, bech32_prefix: &str) -> Result<Self, Error> {
         let client = CwRpcClient::new(rpc_url, block_number)?;
         let block_number = client.block_number();
         let block_timestamp = client.timestamp()?;
@@ -63,7 +64,7 @@ impl Model {
             block_timestamp,
             chain_id,
             canonical_address_length: 32,
-            bech32_prefix: "wasm".to_string(),
+            bech32_prefix: bech32_prefix.to_string(),
         })
     }
 
@@ -89,18 +90,37 @@ impl Model {
         Ok(())
     }
 
-    fn handle_response(&mut self, origin: &Addr, response: &Response) -> Result<(), Error> {
-        for resp in response.messages.iter() {
-            match &resp.msg {
+    fn handle_response(
+        &mut self,
+        instance: &mut RpcContractInstance,
+        response: &Response,
+    ) -> Result<ContractResult<Response>, Error> {
+        let origin = instance.address();
+
+        // last_response is the response of the latest execution
+        // If there are no submessages, this will be returned. Otherwise, response from the submessages will be returned
+        let mut last_response = ContractResult::Ok(response.clone());
+        // otherwise, execute the submessages
+        for sub_msg in response.messages.iter() {
+            let (response, target_addr) = match &sub_msg.msg {
                 CosmosMsg::Wasm(wasm_msg) => match wasm_msg {
                     WasmMsg::Instantiate {
                         admin,
                         code_id,
                         msg,
                         funds,
-                        label,
+                        label: _,
                     } => {
-                        unimplemented!()
+                        match admin {
+                            Some(_) => unimplemented!(),
+                            None => {}
+                        }
+                        // generate contract address automatically
+                        let contract_addr = Addr::unchecked("");
+                        (
+                            self.instantiate_inner(&contract_addr, *code_id, &origin, msg, funds)?,
+                            contract_addr,
+                        )
                     }
                     WasmMsg::Execute {
                         contract_addr: target_addr,
@@ -108,32 +128,86 @@ impl Model {
                         funds,
                     } => {
                         let target_addr = Addr::unchecked(target_addr);
-                        self.execute_inner(
-                            &Addr::unchecked(target_addr),
-                            origin,
-                            msg.as_slice(),
-                            funds,
-                        )?;
+                        (
+                            self.execute_inner(&target_addr, &origin, msg.as_slice(), funds)?,
+                            target_addr,
+                        )
                     }
                     _ => unimplemented!(),
                 },
                 CosmosMsg::Bank(bank_msg) => {
-                    self.bank.borrow_mut().execute(origin, bank_msg)?;
+                    // if bank fails, revert the entire transaction
+                    self.bank.borrow_mut().execute(&origin, bank_msg)?;
+                    unimplemented!()
                 }
                 _ => unimplemented!(),
+            };
+            let do_reply = match &sub_msg.reply_on {
+                ReplyOn::Always => true,
+                ReplyOn::Success => response.is_ok(),
+                ReplyOn::Error => response.is_err(),
+                ReplyOn::Never => false,
+            };
+            // call reply(), and recursively handle response
+            last_response = if do_reply {
+                let env = self.env(&target_addr)?;
+                let reply = Reply {
+                    id: sub_msg.id,
+                    result: match response {
+                        ContractResult::Ok(r) => SubMsgResult::Ok(SubMsgResponse {
+                            events: r.events,
+                            data: r.data,
+                        }),
+                        ContractResult::Err(e) => SubMsgResult::Err(e),
+                    },
+                };
+                let response = instance.reply(&env, &reply)?;
+                if response.is_err() {
+                    // propagate error. instance.reply need not error handling
+                    return Ok(response);
+                } else {
+                    self.handle_response(instance, &response.unwrap())?
+                }
             }
+            // if reply is not called, but the current result is an error, propagate the error
+            else if response.is_err() {
+                return Ok(ContractResult::Err(response.unwrap_err()));
+            }
+            // otherwise, recursively handle the submessages
+            else {
+                self.handle_response(instance, &response.unwrap())?
+            };
         }
-        Ok(())
+        Ok(last_response)
     }
 
     /// TODO: fix instantiate so that it generates the address automatically
-    pub fn instantiate(
+    pub fn instantiate(&mut self, code_id: u64, msg: &[u8], funds: &[Coin]) -> Result<(), Error> {
+        let eoa = self.eoa.clone();
+        let contract_addr = Addr::unchecked("");
+        self.instantiate_inner(&contract_addr, code_id, &Addr::unchecked(eoa), msg, funds)?;
+        self.update_block();
+        Ok(())
+    }
+
+    fn instantiate_inner(
         &mut self,
+        // this argument should be removed someday
         contract_addr: &Addr,
         code_id: u64,
+        sender: &Addr,
         msg: &[u8],
         funds: &[Coin],
-    ) -> Result<(), Error> {
+    ) -> Result<ContractResult<Response>, Error> {
+        // transfer coins
+        let mut bank = self.bank.borrow_mut();
+        let bank_msg = BankMsg::Send {
+            to_address: contract_addr.to_string(),
+            amount: funds.to_vec(),
+        };
+        bank.execute(sender, &bank_msg)?;
+        drop(bank);
+
         let deps = self.new_mock(contract_addr)?;
         let options = InstanceOptions {
             gas_limit: u64::MAX,
@@ -151,12 +225,17 @@ impl Model {
             };
         let mut instance = RpcContractInstance::make_instance(contract_addr, wasm_instance);
         let env = self.env(contract_addr)?;
-        let sender = Addr::unchecked(self.eoa.clone());
-        let response = instance.instantiate(&env, msg, &sender, funds)?;
-        self.handle_response(contract_addr, &response)?;
+        // propagate contract error downwards
+        let response = match instance.instantiate(&env, msg, &sender, funds)? {
+            ContractResult::Ok(r) => r,
+            ContractResult::Err(e) => {
+                return Ok(ContractResult::Err(e));
+            }
+        };
+        let response = self.handle_response(&mut instance, &response)?;
         let instances = unsafe { self.instances.get().as_mut().unwrap() };
         instances.insert(contract_addr.clone(), instance);
-        Ok(())
+        Ok(response)
     }
 
     pub fn execute(
@@ -177,7 +256,7 @@ impl Model {
         sender: &Addr,
         msg: &[u8],
         funds: &[Coin],
-    ) -> Result<(), Error> {
+    ) -> Result<ContractResult<Response>, Error> {
         let env = self.env(contract_addr)?;
 
         // create instance if instance is not materialized
@@ -196,10 +275,15 @@ impl Model {
         drop(bank);
 
         // execute contract code
-        let instance = instances.get_mut(contract_addr).unwrap();
-        let response = instance.execute(&env, msg, &sender, funds)?;
-        self.handle_response(contract_addr, &response)?;
-        Ok(())
+        let mut instance = instances.get_mut(contract_addr).unwrap();
+        // propagate contract error downwards
+        let response = match instance.execute(&env, msg, &sender, funds)? {
+            ContractResult::Ok(r) => r,
+            ContractResult::Err(e) => {
+                return Ok(ContractResult::Err(e));
+            }
+        };
+        self.handle_response(&mut instance, &response)
     }
 
     /// for now, only support WASM queries
@@ -214,6 +298,7 @@ impl Model {
             contract_addr: contract_addr.to_string(),
             msg: Binary::from(msg),
         };
+        // TODO: fix this, propagate contract error down
         instance.query(&env, &wasm_query)
     }
 
@@ -348,11 +433,12 @@ mod test {
         "wasm15le5evw4regnwf9lrjnpakr2075fcyp4n4yzpelvqcuevzkw2lss46hslz";
     const TOKEN_ADDRESS_MALAGA: &'static str =
         "wasm124v54ngky9wxhx87t252x4xfgujmdsu7uhjdugtkkqt39nld0e6st7e64h";
+    const MAINNET_RPC_URL: &'static str = "http://175.207.29.212:26656";
 
     #[test]
     fn test_swap_basic_testnet() {
         use serde_json::Value::Null;
-        let mut model = Model::new(MALAGA_RPC_URL, Some(MALAGA_BLOCK_NUMBER)).unwrap();
+        let mut model = Model::new(MALAGA_RPC_URL, Some(MALAGA_BLOCK_NUMBER), "wasm").unwrap();
         let pair_address = Addr::unchecked(PAIR_ADDRESS_MALAGA);
         let token_address = Addr::unchecked(TOKEN_ADDRESS_MALAGA);
         let my_address = model.eoa.clone();
@@ -417,13 +503,7 @@ mod test {
     }
 
     #[test]
-    fn test_cheat_balance() {
-        use serde_json::Value::Null;
+    fn test_complex_submessages() {
 
-        let mut model = Model::new(MALAGA_RPC_URL, None).unwrap();
-        let my_address = Addr::unchecked(&model.eoa);
-        model
-            .cheat_bank_balance(&my_address, "umlg", 1_000_000_000)
-            .unwrap();
     }
 }
