@@ -13,9 +13,8 @@ default = ["iterator"]
 name = "cosmwasm_simulate"
 
 [dependencies]
-clap = "~2.32"
-cosmwasm-vm = "1.0.0"
-cosmwasm-std = "1.0.0"
+cosmwasm-vm = { path = "../cosmwasm/packages/vm" }
+cosmwasm-std = { path = "../cosmwasm/packages/std" }
 wasmer = "2.3.0"
 wasmer-compiler-singlepass = "2.3.0"
 websocket="0.24.0"

@@ -12,6 +12,7 @@ use cosmwasm_vm::{Backend, InstanceOptions, Storage};
 use dashmap::DashMap;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::mem;
 use std::sync::{Arc, Mutex};
 
 pub type RpcBackend = Backend<RpcMockApi, RpcMockStorage, RpcMockQuerier>;
@@ -21,7 +22,7 @@ pub struct Model {
     bank: Arc<Mutex<Bank>>,
     client: Arc<Mutex<CwRpcClient>>,
     // similar to tx.origin of solidity
-    eoa: String,
+    sender: String,
     // used to generate addresses in instantiate
     code_id_counters: HashMap<u64, u64>,
 
@@ -50,6 +51,34 @@ fn maybe_unzip(input: Vec<u8>) -> Result<Vec<u8>, Error> {
     }
 }
 
+impl Clone for Model {
+    /// duplicates self
+    fn clone(&self) -> Self {
+        let instances = DashMap::new();
+        for it in self.instances.iter_mut() {
+            instances.insert(it.key().clone(), it.value().clone());
+        }
+        let bank = Arc::new(Mutex::new(self.bank.lock().unwrap().clone()));
+        let client = Arc::new(Mutex::new(self.client.lock().unwrap().clone()));
+        Model {
+            instances: Arc::new(instances),
+            bank,
+            client,
+            // similar to tx.origin of solidity
+            sender: self.sender.clone(),
+            // used to generate addresses in instantiate
+            code_id_counters: self.code_id_counters.clone(),
+
+            // fields related to blockchain environment
+            block_number: self.block_number,
+            block_timestamp: self.block_timestamp.clone(),
+            chain_id: self.chain_id.clone(),
+            canonical_address_length: self.canonical_address_length,
+            bech32_prefix: self.bech32_prefix.clone(),
+        }
+    }
+}
+
 impl Model {
     pub fn new(
         rpc_url: &str,
@@ -65,7 +94,7 @@ impl Model {
             instances: Arc::new(DashMap::new()),
             bank: Arc::new(Mutex::new(Bank::new(&client)?)),
             client,
-            eoa: BASE_EOA.to_string(),
+            sender: BASE_EOA.to_string(),
             code_id_counters: HashMap::new(),
 
             block_number,
@@ -92,7 +121,7 @@ impl Model {
                 }
                 Ok(i) => i,
             };
-        let instance = RpcContractInstance::make_instance(&contract_addr, wasm_instance);
+        let instance = RpcContractInstance::new(&contract_addr, wasm_instance);
         self.instances.insert(contract_addr.clone(), instance);
         Ok(())
     }
@@ -245,17 +274,22 @@ impl Model {
         msg: &[u8],
         funds: &[Coin],
     ) -> Result<DebugLog, Error> {
-        let eoa = self.eoa.clone();
+        let sender = self.sender.clone();
         let mut debug_log = DebugLog::new();
+        let state_copy = self.clone();
         let contract_addr = self.generate_address(code_id)?;
         self.instantiate_inner(
             &contract_addr,
             code_id,
-            &Addr::unchecked(eoa),
+            &Addr::unchecked(sender),
             msg,
             funds,
             &mut debug_log,
-        )?;
+        )
+        .map_err(|e| {
+            mem::replace(self, state_copy);
+            e
+        })?;
         self.update_block();
         Ok(debug_log)
     }
@@ -303,7 +337,7 @@ impl Model {
                 }
                 Ok(i) => i,
             };
-        let mut instance = RpcContractInstance::make_instance(contract_addr, wasm_instance);
+        let mut instance = RpcContractInstance::new(contract_addr, wasm_instance);
         let env = self.env(contract_addr)?;
         // propagate contract error downwards
         let response = match instance.instantiate(&env, msg, &sender, funds)? {
@@ -328,14 +362,19 @@ impl Model {
         funds: &[Coin],
     ) -> Result<DebugLog, Error> {
         let mut debug_log = DebugLog::new();
-        let eoa = self.eoa.clone();
+        let sender = self.sender.clone();
+        let state_copy = self.clone();
         self.execute_inner(
             contract_addr,
-            &Addr::unchecked(eoa),
+            &Addr::unchecked(sender),
             msg,
             funds,
             &mut debug_log,
-        )?;
+        )
+        .map_err(|e| {
+            mem::replace(self, state_copy);
+            e
+        })?;
         self.update_block();
         Ok(debug_log)
     }
@@ -485,20 +524,20 @@ impl Model {
             gas_limit: u64::MAX,
             print_debug: false,
         };
-        let wasm_instance = match cosmwasm_vm::Instance::from_code(new_code, deps, options, None) {
+        let instance_inner = match cosmwasm_vm::Instance::from_code(new_code, deps, options, None) {
             Err(e) => {
                 return Err(Error::vm_error(e));
             }
             Ok(i) => i,
         };
-        let instance = RpcContractInstance::make_instance(&contract_addr, wasm_instance);
+        let instance = RpcContractInstance::new(&contract_addr, instance_inner);
         self.instances.insert(contract_addr.clone(), instance);
         Ok(())
     }
 
     /// modify message sender
     pub fn cheat_message_sender(&mut self, my_addr: &Addr) -> Result<(), Error> {
-        self.eoa = my_addr.to_string();
+        self.sender = my_addr.to_string();
         Ok(())
     }
 
@@ -543,7 +582,7 @@ mod test {
         let mut model = Model::new(MALAGA_RPC_URL, Some(MALAGA_BLOCK_NUMBER), "wasm").unwrap();
         let pair_address = Addr::unchecked(PAIR_ADDRESS_MALAGA);
         let token_address = Addr::unchecked(TOKEN_ADDRESS_MALAGA);
-        let my_address = model.eoa.clone();
+        let my_address = model.sender.clone();
 
         let swap_msg_json = json!({
             "swap": {
@@ -609,7 +648,7 @@ mod test {
         let mut model = Model::new(MALAGA_RPC_URL, Some(MALAGA_BLOCK_NUMBER), "wasm").unwrap();
         let _vault_address = Addr::unchecked(VAULT_ADDRESS);
         let vault_router_address = Addr::unchecked(VAULT_ROUTER_ADDRESS);
-        let _my_address = model.eoa.clone();
+        let _my_address = model.sender.clone();
 
         let loan_msg_json = json!({
             "flash_loan": {

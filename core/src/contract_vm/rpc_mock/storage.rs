@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 ///mock storage
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct RpcMockStorage {
     data: BTreeMap<Vec<u8>, Vec<u8>>,
     #[cfg(feature = "iterator")]

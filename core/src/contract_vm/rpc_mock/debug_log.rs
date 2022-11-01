@@ -24,7 +24,6 @@ impl fmt::Display for DebugLogEntry {
     }
 }
 
-
 impl DebugLog {
     pub fn new() -> Self {
         Self {

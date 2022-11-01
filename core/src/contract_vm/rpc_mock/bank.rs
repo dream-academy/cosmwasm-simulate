@@ -7,6 +7,7 @@ use cosmwasm_std::{
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+#[derive(Clone)]
 pub struct Bank {
     // address -> ( denom -> amount )
     balances: HashMap<Addr, HashMap<String, Uint128>>,

@@ -13,13 +13,14 @@ use crate::contract_vm::Error;
 
 type RpcInstance = Instance<RpcMockApi, RpcMockStorage, RpcMockQuerier>;
 
+#[derive(Clone)]
 pub struct RpcContractInstance {
     contract_info: ContractInfo,
     instance: RpcInstance,
 }
 
 impl RpcContractInstance {
-    pub fn make_instance(address: &Addr, instance: RpcInstance) -> Self {
+    pub fn new(address: &Addr, instance: RpcInstance) -> Self {
         let contract_info = ContractInfo {
             address: address.clone(),
         };

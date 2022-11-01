@@ -61,30 +61,6 @@ pub mod rpc_items {
     }
 }
 
-pub struct CwRpcClient {
-    _inner: HttpClient,
-    block_number: u64,
-
-    cache: RpcCache,
-}
-
-#[derive(Deserialize, Serialize, PartialEq, Eq, Hash)]
-pub struct RpcCacheK {
-    path: String,
-    data: Vec<u8>,
-}
-
-pub type RpcCacheV = Vec<u8>;
-
-pub enum RpcCache {
-    Empty,
-    FileBacked {
-        // (path: String, data: Vec<u8>) -> AbciQuery.value
-        db: HashMap<RpcCacheK, RpcCacheV>,
-        file: fs::File,
-    },
-}
-
 fn rwopen<P: AsRef<Path>>(path: P) -> std::io::Result<fs::File> {
     OpenOptions::new()
         .read(true)
@@ -98,6 +74,49 @@ fn sha256hex(input_str: &str) -> String {
     hasher.update(input_str.as_bytes());
     let result = hasher.finalize();
     hex::encode(result)
+}
+
+#[derive(Clone)]
+pub struct CwRpcClient {
+    _inner: HttpClient,
+    block_number: u64,
+
+    cache: RpcCache,
+}
+
+#[derive(Deserialize, Serialize, PartialEq, Eq, Hash, Clone)]
+pub struct RpcCacheK {
+    path: String,
+    data: Vec<u8>,
+}
+
+pub type RpcCacheV = Vec<u8>;
+
+pub enum RpcCache {
+    Empty,
+    FileBacked {
+        // (path: String, data: Vec<u8>) -> AbciQuery.value
+        db: HashMap<RpcCacheK, RpcCacheV>,
+        file_name: String,
+        file: fs::File,
+    },
+}
+
+impl Clone for RpcCache {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Empty => Self::Empty,
+            Self::FileBacked {
+                db,
+                file_name,
+                file,
+            } => Self::FileBacked {
+                db: db.clone(),
+                file_name: file_name.clone(),
+                file: rwopen(file_name).unwrap(),
+            },
+        }
+    }
 }
 
 impl RpcCache {
@@ -127,7 +146,11 @@ impl RpcCache {
             let file = rwopen(cachefile_path).map_err(|e| Error::io_error(e))?;
             (file, HashMap::new())
         };
-        Ok(Self::FileBacked { db, file })
+        Ok(Self::FileBacked {
+            db,
+            file_name: cachefile,
+            file,
+        })
     }
 
     pub fn read(&self, path: &str, data: &[u8]) -> Result<Option<Vec<u8>>, Error> {
@@ -138,7 +161,7 @@ impl RpcCache {
         match self {
             // empty always returns None
             Self::Empty => Ok(None),
-            Self::FileBacked { db, file: _ } => Ok(db.get(&key).map(|x| x.clone())),
+            Self::FileBacked { db, .. } => Ok(db.get(&key).map(|x| x.clone())),
         }
     }
 
@@ -150,7 +173,7 @@ impl RpcCache {
         match self {
             // empty always returns None
             Self::Empty => Ok(()),
-            Self::FileBacked { db, file: _ } => {
+            Self::FileBacked { db, .. } => {
                 db.insert(key, response.clone());
                 Ok(())
             }
@@ -160,7 +183,7 @@ impl RpcCache {
     pub fn save(&mut self) -> Result<(), Error> {
         match self {
             Self::Empty => Ok(()),
-            Self::FileBacked { db, file } => {
+            Self::FileBacked { db, file, .. } => {
                 let serialized = ron::to_string(db).map_err(|e| Error::serialization_error(e))?;
                 file.seek(SeekFrom::Start(0))
                     .map_err(|e| Error::io_error(e))?;

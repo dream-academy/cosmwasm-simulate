@@ -26,8 +26,7 @@ impl DebugLogClass {
         let debug_log = &self_.inner;
         if let Some(err_msg) = &debug_log.err_msg {
             Ok(err_msg.to_string())
-        }
-        else {
+        } else {
             Ok("".to_string())
         }
     }

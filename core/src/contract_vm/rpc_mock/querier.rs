@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex};
 
 type Instances = DashMap<Addr, RpcContractInstance>;
 
+#[derive(Clone)]
 pub struct RpcMockQuerier {
     client: Arc<Mutex<CwRpcClient>>,
     bank: Arc<Mutex<Bank>>,
