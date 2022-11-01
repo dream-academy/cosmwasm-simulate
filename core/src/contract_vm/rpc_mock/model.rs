@@ -10,16 +10,16 @@ use cosmwasm_std::{
 };
 use cosmwasm_vm::{Backend, InstanceOptions, Storage};
 use sha2::{Digest, Sha256};
-use std::cell::{RefCell, UnsafeCell};
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::sync::{Mutex, Arc};
+use dashmap::DashMap;
 
 pub type RpcBackend = Backend<RpcMockApi, RpcMockStorage, RpcMockQuerier>;
 
 pub struct Model {
-    instances: Rc<UnsafeCell<HashMap<Addr, RpcContractInstance>>>,
-    bank: Rc<RefCell<Bank>>,
-    client: Rc<RefCell<CwRpcClient>>,
+    instances: Arc<DashMap<Addr, RpcContractInstance>>,
+    bank: Arc<Mutex<Bank>>,
+    client: Arc<Mutex<CwRpcClient>>,
     // similar to tx.origin of solidity
     eoa: String,
     // used to generate addresses in instantiate
@@ -60,10 +60,10 @@ impl Model {
         let block_number = client.block_number();
         let block_timestamp = client.timestamp()?;
         let chain_id = client.chain_id()?;
-        let client = Rc::new(RefCell::new(client));
+        let client = Arc::new(Mutex::new(client));
         Ok(Model {
-            instances: Rc::new(UnsafeCell::new(HashMap::new())),
-            bank: Rc::new(RefCell::new(Bank::new(&client)?)),
+            instances: Arc::new(DashMap::new()),
+            bank: Arc::new(Mutex::new(Bank::new(&client)?)),
             client,
             eoa: BASE_EOA.to_string(),
             code_id_counters: HashMap::new(),
@@ -82,7 +82,7 @@ impl Model {
             gas_limit: u64::MAX,
             print_debug: false,
         };
-        let mut client = self.client.borrow_mut();
+        let mut client = self.client.lock().unwrap();
         let contract_info = client.query_wasm_contract_info(contract_addr.as_str())?;
         let wasm_code = maybe_unzip(client.query_wasm_contract_code(contract_info.code_id)?)?;
         let wasm_instance =
@@ -93,8 +93,7 @@ impl Model {
                 Ok(i) => i,
             };
         let instance = RpcContractInstance::make_instance(&contract_addr, wasm_instance);
-        let instances = unsafe { self.instances.get().as_mut().unwrap() };
-        instances.insert(contract_addr.clone(), instance);
+        self.instances.insert(contract_addr.clone(), instance);
         Ok(())
     }
 
@@ -116,11 +115,10 @@ impl Model {
 
     fn handle_response(
         &mut self,
-        instance: &mut RpcContractInstance,
+        origin: &Addr,
         response: &Response,
         debug_log: &mut DebugLog,
     ) -> Result<ContractResult<Response>, Error> {
-        let origin = instance.address();
 
         // last_response is the response of the latest execution
         // If there are no submessages, this will be returned. Otherwise, response from the submessages will be returned
@@ -179,7 +177,7 @@ impl Model {
                 },
                 CosmosMsg::Bank(bank_msg) => {
                     // if bank fails, revert the entire transaction
-                    let mut bank = self.bank.borrow_mut();
+                    let mut bank = self.bank.lock().unwrap();
                     match bank.execute(&origin, &bank_msg)? {
                         ContractResult::Ok(r) => {
                             debug_log.append_log(&r);
@@ -213,14 +211,20 @@ impl Model {
                         ContractResult::Err(e) => SubMsgResult::Err(e),
                     },
                 };
+                if !self.instances.contains_key(origin) {
+                    self.create_instance(origin)?;
+                }
+                let mut instance = self.instances.get_mut(origin).unwrap();
                 let maybe_response = instance.reply(&env, &reply)?;
+                drop(instance);
+
                 if maybe_response.is_err() {
                     // propagate error. instance.reply need not error handling
                     return Ok(maybe_response);
                 } else {
                     let response = maybe_response.unwrap();
                     debug_log.append_log(&response);
-                    self.handle_response(instance, &response, debug_log)?
+                    self.handle_response(origin, &response, debug_log)?
                 }
             }
             // if reply is not called, but the current result is an error, propagate the error
@@ -229,7 +233,7 @@ impl Model {
             }
             // otherwise, recursively handle the submessages
             else {
-                self.handle_response(instance, &response.unwrap(), debug_log)?
+                self.handle_response(origin, &response.unwrap(), debug_log)?
             };
         }
         Ok(last_response)
@@ -268,7 +272,7 @@ impl Model {
         debug_log: &mut DebugLog,
     ) -> Result<ContractResult<Response>, Error> {
         // transfer coins
-        let mut bank = self.bank.borrow_mut();
+        let mut bank = self.bank.lock().unwrap();
         let bank_msg = BankMsg::Send {
             to_address: contract_addr.to_string(),
             amount: funds.to_vec(),
@@ -289,9 +293,10 @@ impl Model {
             gas_limit: u64::MAX,
             print_debug: false,
         };
-        let mut client = self.client.borrow_mut();
+        let mut client = self.client.lock().unwrap();
         let wasm_code = maybe_unzip(client.query_wasm_contract_code(code_id)?)?;
         drop(client);
+
         let wasm_instance =
             match cosmwasm_vm::Instance::from_code(wasm_code.as_slice(), deps, options, None) {
                 Err(e) => {
@@ -312,9 +317,8 @@ impl Model {
                 return Ok(ContractResult::Err(e));
             }
         };
-        let response = self.handle_response(&mut instance, &response, debug_log)?;
-        let instances = unsafe { self.instances.get().as_mut().unwrap() };
-        instances.insert(contract_addr.clone(), instance);
+        let response = self.handle_response(contract_addr, &response, debug_log)?;
+        self.instances.insert(contract_addr.clone(), instance);
         Ok(response)
     }
 
@@ -348,13 +352,12 @@ impl Model {
         let env = self.env(contract_addr)?;
 
         // create instance if instance is not materialized
-        let instances = unsafe { self.instances.get().as_mut().unwrap() };
-        if !instances.contains_key(&contract_addr) {
+        if !self.instances.contains_key(&contract_addr) {
             self.create_instance(contract_addr)?;
         }
 
         // transfer coins
-        let mut bank = self.bank.borrow_mut();
+        let mut bank = self.bank.lock().unwrap();
         let bank_msg = BankMsg::Send {
             to_address: contract_addr.to_string(),
             amount: funds.to_vec(),
@@ -371,7 +374,7 @@ impl Model {
         drop(bank);
 
         // execute contract code
-        let mut instance = instances.get_mut(contract_addr).unwrap();
+        let mut instance = self.instances.get_mut(contract_addr).unwrap();
         // propagate contract error downwards
         let response = match instance.execute(&env, msg, &sender, funds)? {
             ContractResult::Ok(r) => {
@@ -383,17 +386,17 @@ impl Model {
                 return Ok(ContractResult::Err(e));
             }
         };
-        self.handle_response(&mut instance, &response, debug_log)
+        drop(instance);
+        self.handle_response(contract_addr, &response, debug_log)
     }
 
     /// for now, only support WASM queries
     pub fn query_wasm(&mut self, contract_addr: &Addr, msg: &[u8]) -> Result<Binary, Error> {
         let env = self.env(contract_addr)?;
-        let instances = unsafe { self.instances.get().as_mut().unwrap() };
-        if !instances.contains_key(&contract_addr) {
+        if !self.instances.contains_key(&contract_addr) {
             self.create_instance(contract_addr)?;
         }
-        let instance = instances.get_mut(contract_addr).unwrap();
+        let mut instance = self.instances.get_mut(contract_addr).unwrap();
         let wasm_query = WasmQuery::Smart {
             contract_addr: contract_addr.to_string(),
             msg: Binary::from(msg),
@@ -437,7 +440,7 @@ impl Model {
 
     fn mock_storage(&self, contract_addr: &Addr) -> Result<RpcMockStorage, Error> {
         let mut storage = RpcMockStorage::new();
-        let mut client = self.client.borrow_mut();
+        let mut client = self.client.lock().unwrap();
         let states = client.query_wasm_contract_all(contract_addr.as_str())?;
         for (k, v) in states {
             storage
@@ -467,18 +470,17 @@ impl Model {
         denom: &str,
         new_balance: u128,
     ) -> Result<(), Error> {
-        let mut bank = self.bank.borrow_mut();
+        let mut bank = self.bank.lock().unwrap();
         bank.set_balance(address, denom, Uint128::new(new_balance))?;
         Ok(())
     }
 
     /// modify code
     pub fn cheat_code(&mut self, contract_addr: &Addr, new_code: &[u8]) -> Result<(), Error> {
-        let instances = unsafe { self.instances.get().as_mut().unwrap() };
-        if !instances.contains_key(&contract_addr) {
+        if !self.instances.contains_key(&contract_addr) {
             self.create_instance(contract_addr)?;
         }
-        let instance = instances.remove(contract_addr).unwrap();
+        let (_, instance) = self.instances.remove(contract_addr).unwrap();
         let deps = instance.recycle();
         let options = InstanceOptions {
             gas_limit: u64::MAX,
@@ -491,7 +493,7 @@ impl Model {
             Ok(i) => i,
         };
         let instance = RpcContractInstance::make_instance(&contract_addr, wasm_instance);
-        instances.insert(contract_addr.clone(), instance);
+        self.instances.insert(contract_addr.clone(), instance);
         Ok(())
     }
 
@@ -508,11 +510,10 @@ impl Model {
         key: &[u8],
         value: &[u8],
     ) -> Result<(), Error> {
-        let instances = unsafe { self.instances.get().as_mut().unwrap() };
-        if !instances.contains_key(&contract_addr) {
+        if !self.instances.contains_key(&contract_addr) {
             self.create_instance(contract_addr)?;
         }
-        let mut instance = instances.remove(contract_addr).unwrap();
+        let mut instance = self.instances.get_mut(contract_addr).unwrap();
         instance.storage_write(key, value)?;
         Ok(())
     }
@@ -576,7 +577,7 @@ mod test {
             address: my_address.clone(),
             denom: "umlg".to_string(),
         };
-        let resp = model.bank.borrow_mut().query(&bank_query).unwrap();
+        let resp = model.bank.lock().unwrap().query(&bank_query).unwrap();
         let resp_bank: BalanceResponse = serde_json::from_slice(resp.as_slice()).unwrap();
         let umlg_balance_before: u128 = resp_bank.amount.amount.into();
         let prev_block_num = model.block_number;
@@ -595,7 +596,7 @@ mod test {
             .unwrap();
         let resp_json: serde_json::Value = serde_json::from_slice(resp.as_slice()).unwrap();
         let token_balance_after = u128::from_str(resp_json["balance"].as_str().unwrap()).unwrap();
-        let resp = model.bank.borrow_mut().query(&bank_query).unwrap();
+        let resp = model.bank.lock().unwrap().query(&bank_query).unwrap();
         let resp_bank: BalanceResponse = serde_json::from_slice(resp.as_slice()).unwrap();
         let umlg_balance_after: u128 = resp_bank.amount.amount.into();
 

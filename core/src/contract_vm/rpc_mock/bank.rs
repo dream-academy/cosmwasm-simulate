@@ -4,12 +4,13 @@ use cosmwasm_std::{
     to_binary, Addr, AllBalanceResponse, BalanceResponse, BankMsg, BankQuery, Binary, Coin,
     ContractResult, Event, Response, Uint128,
 };
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 pub struct Bank {
     // address -> ( denom -> amount )
     balances: HashMap<Addr, HashMap<String, Uint128>>,
-    client: Rc<RefCell<CwRpcClient>>,
+    client: Arc<Mutex<CwRpcClient>>,
 }
 
 fn coin_spent_event(sender: &Addr, amount: Uint128, denom: &str) -> Event {
@@ -25,16 +26,16 @@ fn coin_received_event(receiver: &Addr, amount: Uint128, denom: &str) -> Event {
 }
 
 impl Bank {
-    pub fn new(client: &Rc<RefCell<CwRpcClient>>) -> Result<Self, Error> {
+    pub fn new(client: &Arc<Mutex<CwRpcClient>>) -> Result<Self, Error> {
         Ok(Bank {
             balances: HashMap::new(),
-            client: Rc::clone(client),
+            client: Arc::clone(client),
         })
     }
 
     pub fn get_balance(&mut self, owner: &Addr, denom: &str) -> Result<Uint128, Error> {
         if !self.balances.contains_key(owner) {
-            let mut client = self.client.borrow_mut();
+            let mut client = self.client.lock().unwrap();
             self.balances.insert(
                 owner.clone(),
                 client
@@ -54,7 +55,7 @@ impl Bank {
 
     pub fn get_balances(&mut self, owner: &Addr) -> Result<Vec<Coin>, Error> {
         if !self.balances.contains_key(owner) {
-            let mut client = self.client.borrow_mut();
+            let mut client = self.client.lock().unwrap();
             self.balances.insert(
                 owner.clone(),
                 client

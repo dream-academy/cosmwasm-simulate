@@ -6,16 +6,15 @@ use cosmwasm_std::{
 use cosmwasm_vm::{BackendError, BackendResult, GasInfo, Querier};
 use serde::{Deserialize, Serialize};
 
-use std::cell::{RefCell, UnsafeCell};
-use std::collections::HashMap;
-use std::rc::Rc;
+use dashmap::DashMap;
+use std::sync::{Arc, Mutex};
 
-type Instances = HashMap<Addr, RpcContractInstance>;
+type Instances = DashMap<Addr, RpcContractInstance>;
 
 pub struct RpcMockQuerier {
-    client: Rc<RefCell<CwRpcClient>>,
-    bank: Rc<RefCell<Bank>>,
-    instances: Rc<UnsafeCell<Instances>>,
+    client: Arc<Mutex<CwRpcClient>>,
+    bank: Arc<Mutex<Bank>>,
+    instances: Arc<Instances>,
 }
 
 const PRINTER_ADDR: &str = "supergodprinter";
@@ -47,7 +46,7 @@ impl Querier for RpcMockQuerier {
         };
         match request {
             QueryRequest::Bank(bank_query) => {
-                let mut bank = self.bank.borrow_mut();
+                let mut bank = self.bank.lock().unwrap();
                 match bank.query(&bank_query) {
                     Ok(resp) => {
                         (
@@ -63,7 +62,6 @@ impl Querier for RpcMockQuerier {
                 }
             }
             QueryRequest::Wasm(wasm_query) => {
-                let instances = unsafe { self.instances.get().as_mut().unwrap() };
                 let contract_addr = Addr::unchecked(match &wasm_query {
                     WasmQuery::ContractInfo { contract_addr } => contract_addr,
                     WasmQuery::Raw { contract_addr, .. } => contract_addr,
@@ -88,7 +86,7 @@ impl Querier for RpcMockQuerier {
                             panic!("invalid query to printer");
                         }
                     }
-                } else if let Some(instance) = instances.get_mut(&contract_addr) {
+                } else if let Some(mut instance) = self.instances.get_mut(&contract_addr) {
                     let env = Env {
                         block: BlockInfo {
                             // TODO: fix
@@ -113,7 +111,7 @@ impl Querier for RpcMockQuerier {
                     // since we do not have access to model, we can't create a new instance from here
                     // but, it doesn't affect the integrity of the model, because whenever cheat codes are invoked,
                     // it creates an instance and thus it must exist in the instances hashmap
-                    let mut client = self.client.borrow_mut();
+                    let mut client = self.client.lock().unwrap();
                     match &wasm_query {
                         WasmQuery::ContractInfo { contract_addr: _ } => {
                             unimplemented!()
@@ -175,14 +173,14 @@ impl Querier for RpcMockQuerier {
 
 impl RpcMockQuerier {
     pub fn new(
-        client: &Rc<RefCell<CwRpcClient>>,
-        bank: &Rc<RefCell<Bank>>,
-        instances: &Rc<UnsafeCell<Instances>>,
+        client: &Arc<Mutex<CwRpcClient>>,
+        bank: &Arc<Mutex<Bank>>,
+        instances: &Arc<Instances>,
     ) -> Self {
         Self {
-            client: Rc::clone(client),
-            bank: Rc::clone(bank),
-            instances: Rc::clone(instances),
+            client: Arc::clone(client),
+            bank: Arc::clone(bank),
+            instances: Arc::clone(instances),
         }
     }
 }
