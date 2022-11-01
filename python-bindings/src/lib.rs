@@ -88,6 +88,15 @@ impl Model {
         Ok(DebugLog { inner: debug_log })
     }
 
+    pub fn query(mut self_: PyRefMut<Self>, contract_addr_: &str, msg: &[u8]) -> PyResult<Vec<u8>> {
+        let model = &mut self_.inner;
+        let contract_addr = Addr::unchecked(contract_addr_);
+        let out = model
+            .query_wasm(&contract_addr, msg)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        Ok(out.to_vec())
+    }
+
     pub fn cheat_block_number(mut self_: PyRefMut<Self>, block_number: u64) -> PyResult<()> {
         let model = &mut self_.inner;
         model
@@ -106,9 +115,27 @@ impl Model {
         Ok(())
     }
 
-    pub fn cheat_code(mut self_: PyRefMut<Self>, contract_addr: &str, code: &[u8]) -> PyResult<()> {
+    pub fn cheat_bank_balance(
+        mut self_: PyRefMut<Self>,
+        addr_: &str,
+        amount: (String, u128),
+    ) -> PyResult<()> {
         let model = &mut self_.inner;
-        let contract_addr = Addr::unchecked(contract_addr);
+        let addr = Addr::unchecked(addr_);
+        let (denom, new_balance) = amount;
+        model
+            .cheat_bank_balance(&addr, &denom, new_balance)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        Ok(())
+    }
+
+    pub fn cheat_code(
+        mut self_: PyRefMut<Self>,
+        contract_addr_: &str,
+        code: &[u8],
+    ) -> PyResult<()> {
+        let model = &mut self_.inner;
+        let contract_addr = Addr::unchecked(contract_addr_);
         model
             .cheat_code(&contract_addr, code)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;

@@ -32,6 +32,9 @@ pub struct Model {
     chain_id: String,
     canonical_address_length: usize,
     bech32_prefix: String,
+
+    // for debugging
+    debug_log: Arc<Mutex<DebugLog>>,
 }
 
 const BLOCK_EPOCH: u64 = 1_000_000_000;
@@ -60,6 +63,7 @@ impl Clone for Model {
         }
         let bank = Arc::new(Mutex::new(self.bank.lock().unwrap().clone()));
         let client = Arc::new(Mutex::new(self.client.lock().unwrap().clone()));
+        let debug_log = Arc::new(Mutex::new(self.debug_log.lock().unwrap().clone()));
         Model {
             instances: Arc::new(instances),
             bank,
@@ -75,6 +79,8 @@ impl Clone for Model {
             chain_id: self.chain_id.clone(),
             canonical_address_length: self.canonical_address_length,
             bech32_prefix: self.bech32_prefix.clone(),
+
+            debug_log,
         }
     }
 }
@@ -102,11 +108,12 @@ impl Model {
             chain_id,
             canonical_address_length: 32,
             bech32_prefix: bech32_prefix.to_string(),
+            debug_log: Arc::new(Mutex::new(DebugLog::new())),
         })
     }
 
     fn create_instance(&mut self, contract_addr: &Addr) -> Result<(), Error> {
-        let deps = self.new_mock(&contract_addr)?;
+        let deps = self.new_mock(&contract_addr, &self.debug_log)?;
         let options = InstanceOptions {
             gas_limit: u64::MAX,
             print_debug: false,
@@ -146,7 +153,6 @@ impl Model {
         &mut self,
         origin: &Addr,
         response: &Response,
-        debug_log: &mut DebugLog,
     ) -> Result<ContractResult<Response>, Error> {
         // last_response is the response of the latest execution
         // If there are no submessages, this will be returned. Otherwise, response from the submessages will be returned
@@ -173,14 +179,7 @@ impl Model {
                         // generate contract address automatically
                         let contract_addr = self.generate_address(*code_id)?;
                         (
-                            self.instantiate_inner(
-                                &contract_addr,
-                                *code_id,
-                                &origin,
-                                msg,
-                                funds,
-                                debug_log,
-                            )?,
+                            self.instantiate_inner(&contract_addr, *code_id, &origin, msg, funds)?,
                             contract_addr,
                         )
                     }
@@ -191,13 +190,7 @@ impl Model {
                     } => {
                         let target_addr = Addr::unchecked(target_addr);
                         (
-                            self.execute_inner(
-                                &target_addr,
-                                &origin,
-                                msg.as_slice(),
-                                funds,
-                                debug_log,
-                            )?,
+                            self.execute_inner(&target_addr, &origin, msg.as_slice(), funds)?,
                             target_addr,
                         )
                     }
@@ -208,11 +201,11 @@ impl Model {
                     let mut bank = self.bank.lock().unwrap();
                     match bank.execute(&origin, &bank_msg)? {
                         ContractResult::Ok(r) => {
-                            debug_log.append_log(&r);
+                            self.debug_log.lock().unwrap().append_log(&r);
                             last_response = ContractResult::Ok(r);
                         }
                         ContractResult::Err(e) => {
-                            debug_log.set_err_msg(&e);
+                            self.debug_log.lock().unwrap().set_err_msg(&e);
                             return Ok(ContractResult::Err(e));
                         }
                     };
@@ -251,8 +244,8 @@ impl Model {
                     return Ok(maybe_response);
                 } else {
                     let response = maybe_response.unwrap();
-                    debug_log.append_log(&response);
-                    self.handle_response(origin, &response, debug_log)?
+                    self.debug_log.lock().unwrap().append_log(&response);
+                    self.handle_response(origin, &response)?
                 }
             }
             // if reply is not called, but the current result is an error, propagate the error
@@ -261,7 +254,7 @@ impl Model {
             }
             // otherwise, recursively handle the submessages
             else {
-                self.handle_response(origin, &response.unwrap(), debug_log)?
+                self.handle_response(origin, &response.unwrap())?
             };
         }
         Ok(last_response)
@@ -275,7 +268,7 @@ impl Model {
         funds: &[Coin],
     ) -> Result<DebugLog, Error> {
         let sender = self.sender.clone();
-        let mut debug_log = DebugLog::new();
+        let empty_log = DebugLog::new();
         let state_copy = self.clone();
         let contract_addr = self.generate_address(code_id)?;
         self.instantiate_inner(
@@ -284,7 +277,6 @@ impl Model {
             &Addr::unchecked(sender),
             msg,
             funds,
-            &mut debug_log,
         )
         .map_err(|e| {
             // revert entire state
@@ -292,7 +284,7 @@ impl Model {
             e
         })?;
         self.update_block();
-        Ok(debug_log)
+        Ok(mem::replace(&mut self.debug_log.lock().unwrap(), empty_log))
     }
 
     fn instantiate_inner(
@@ -303,7 +295,6 @@ impl Model {
         sender: &Addr,
         msg: &[u8],
         funds: &[Coin],
-        debug_log: &mut DebugLog,
     ) -> Result<ContractResult<Response>, Error> {
         // transfer coins
         let mut bank = self.bank.lock().unwrap();
@@ -313,16 +304,16 @@ impl Model {
         };
         match bank.execute(sender, &bank_msg)? {
             ContractResult::Ok(r) => {
-                debug_log.append_log(&r);
+                self.debug_log.lock().unwrap().append_log(&r);
             }
             ContractResult::Err(e) => {
-                debug_log.set_err_msg(&e);
+                self.debug_log.lock().unwrap().set_err_msg(&e);
                 return Ok(ContractResult::Err(e));
             }
         };
         drop(bank);
 
-        let deps = self.new_mock(contract_addr)?;
+        let deps = self.new_mock(contract_addr, &self.debug_log)?;
         let options = InstanceOptions {
             gas_limit: u64::MAX,
             print_debug: false,
@@ -343,15 +334,15 @@ impl Model {
         // propagate contract error downwards
         let response = match instance.instantiate(&env, msg, &sender, funds)? {
             ContractResult::Ok(r) => {
-                debug_log.append_log(&r);
+                self.debug_log.lock().unwrap().append_log(&r);
                 r
             }
             ContractResult::Err(e) => {
-                debug_log.set_err_msg(&e);
+                self.debug_log.lock().unwrap().set_err_msg(&e);
                 return Ok(ContractResult::Err(e));
             }
         };
-        let response = self.handle_response(contract_addr, &response, debug_log)?;
+        let response = self.handle_response(contract_addr, &response)?;
         self.instances.insert(contract_addr.clone(), instance);
         Ok(response)
     }
@@ -362,23 +353,17 @@ impl Model {
         msg: &[u8],
         funds: &[Coin],
     ) -> Result<DebugLog, Error> {
-        let mut debug_log = DebugLog::new();
+        let empty_log = DebugLog::new();
         let sender = self.sender.clone();
         let state_copy = self.clone();
-        self.execute_inner(
-            contract_addr,
-            &Addr::unchecked(sender),
-            msg,
-            funds,
-            &mut debug_log,
-        )
-        .map_err(|e| {
-            // revert entire state
-            let _ = mem::replace(self, state_copy);
-            e
-        })?;
+        self.execute_inner(contract_addr, &Addr::unchecked(sender), msg, funds)
+            .map_err(|e| {
+                // revert entire state
+                let _ = mem::replace(self, state_copy);
+                e
+            })?;
         self.update_block();
-        Ok(debug_log)
+        Ok(mem::replace(&mut self.debug_log.lock().unwrap(), empty_log))
     }
 
     fn execute_inner(
@@ -387,7 +372,6 @@ impl Model {
         sender: &Addr,
         msg: &[u8],
         funds: &[Coin],
-        debug_log: &mut DebugLog,
     ) -> Result<ContractResult<Response>, Error> {
         let env = self.env(contract_addr)?;
 
@@ -404,10 +388,10 @@ impl Model {
         };
         match bank.execute(sender, &bank_msg)? {
             ContractResult::Ok(r) => {
-                debug_log.append_log(&r);
+                self.debug_log.lock().unwrap().append_log(&r);
             }
             ContractResult::Err(e) => {
-                debug_log.set_err_msg(&e);
+                self.debug_log.lock().unwrap().set_err_msg(&e);
                 return Ok(ContractResult::Err(e));
             }
         };
@@ -418,16 +402,16 @@ impl Model {
         // propagate contract error downwards
         let response = match instance.execute(&env, msg, &sender, funds)? {
             ContractResult::Ok(r) => {
-                debug_log.append_log(&r);
+                self.debug_log.lock().unwrap().append_log(&r);
                 r
             }
             ContractResult::Err(e) => {
-                debug_log.set_err_msg(&e);
+                self.debug_log.lock().unwrap().set_err_msg(&e);
                 return Ok(ContractResult::Err(e));
             }
         };
         drop(instance);
-        self.handle_response(contract_addr, &response, debug_log)
+        self.handle_response(contract_addr, &response)
     }
 
     /// for now, only support WASM queries
@@ -453,12 +437,16 @@ impl Model {
         self.block_timestamp.plus_nanos(BLOCK_EPOCH);
     }
 
-    fn new_mock(&self, contract_addr: &Addr) -> Result<RpcBackend, Error> {
+    fn new_mock(
+        &self,
+        contract_addr: &Addr,
+        debug_log: &Arc<Mutex<DebugLog>>,
+    ) -> Result<RpcBackend, Error> {
         Ok(Backend {
             storage: self.mock_storage(contract_addr)?,
             // is this correct?
             api: RpcMockApi::new(self.canonical_address_length, self.bech32_prefix.as_str())?,
-            querier: RpcMockQuerier::new(&self.client, &self.bank, &self.instances),
+            querier: RpcMockQuerier::new(&self.client, &self.bank, debug_log, &self.instances),
         })
     }
 

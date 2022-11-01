@@ -1,4 +1,7 @@
-use crate::contract_vm::rpc_mock::{Bank, CwRpcClient, RpcContractInstance};
+use crate::{
+    contract_vm::rpc_mock::{Bank, CwRpcClient, RpcContractInstance},
+    DebugLog,
+};
 use cosmwasm_std::{
     from_binary, from_slice, to_binary, Addr, Binary, BlockInfo, ContractInfo, ContractResult, Env,
     QueryRequest, SystemResult, Timestamp, WasmQuery,
@@ -15,6 +18,7 @@ type Instances = DashMap<Addr, RpcContractInstance>;
 pub struct RpcMockQuerier {
     client: Arc<Mutex<CwRpcClient>>,
     bank: Arc<Mutex<Bank>>,
+    debug_log: Arc<Mutex<DebugLog>>,
     instances: Arc<Instances>,
 }
 
@@ -76,7 +80,7 @@ impl Querier for RpcMockQuerier {
                             msg,
                         } => {
                             let msg: PrintRequest = from_binary(&msg).unwrap();
-                            println!("[*] print: {}", msg.msg);
+                            self.debug_log.lock().unwrap().append_stdout(&msg.msg);
                             let resp = to_binary(&PrintResponse { ack: true }).unwrap();
                             (
                                 Ok(SystemResult::Ok(ContractResult::Ok(resp))),
@@ -176,11 +180,13 @@ impl RpcMockQuerier {
     pub fn new(
         client: &Arc<Mutex<CwRpcClient>>,
         bank: &Arc<Mutex<Bank>>,
+        debug_log: &Arc<Mutex<DebugLog>>,
         instances: &Arc<Instances>,
     ) -> Self {
         Self {
             client: Arc::clone(client),
             bank: Arc::clone(bank),
+            debug_log: Arc::clone(debug_log),
             instances: Arc::clone(instances),
         }
     }
