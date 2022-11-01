@@ -287,7 +287,8 @@ impl Model {
             &mut debug_log,
         )
         .map_err(|e| {
-            mem::replace(self, state_copy);
+            // revert entire state
+            let _ = mem::replace(self, state_copy);
             e
         })?;
         self.update_block();
@@ -372,7 +373,8 @@ impl Model {
             &mut debug_log,
         )
         .map_err(|e| {
-            mem::replace(self, state_copy);
+            // revert entire state
+            let _ = mem::replace(self, state_copy);
             e
         })?;
         self.update_block();
