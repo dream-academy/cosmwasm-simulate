@@ -568,6 +568,7 @@ dependencies = [
 name = "cwsimpy"
 version = "0.1.0"
 dependencies = [
+ "cosmwasm-simulate",
  "pyo3",
 ]
 

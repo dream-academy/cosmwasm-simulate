@@ -9,10 +9,10 @@ use cosmwasm_std::{
     Response, SubMsgResponse, SubMsgResult, Timestamp, Uint128, WasmMsg, WasmQuery,
 };
 use cosmwasm_vm::{Backend, InstanceOptions, Storage};
+use dashmap::DashMap;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::sync::{Mutex, Arc};
-use dashmap::DashMap;
+use std::sync::{Arc, Mutex};
 
 pub type RpcBackend = Backend<RpcMockApi, RpcMockStorage, RpcMockQuerier>;
 
@@ -119,7 +119,6 @@ impl Model {
         response: &Response,
         debug_log: &mut DebugLog,
     ) -> Result<ContractResult<Response>, Error> {
-
         // last_response is the response of the latest execution
         // If there are no submessages, this will be returned. Otherwise, response from the submessages will be returned
         if response.messages.len() == 0 {

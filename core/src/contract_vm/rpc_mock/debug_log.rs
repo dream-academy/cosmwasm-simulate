@@ -1,5 +1,7 @@
 use cosmwasm_std::{Attribute, Binary, Event, Response};
 use serde::{Deserialize, Serialize};
+use serde_json::to_string;
+use std::fmt;
 
 #[derive(Serialize, Deserialize, Clone, Default, Debug, PartialEq, Eq)]
 pub struct DebugLog {
@@ -14,6 +16,14 @@ pub struct DebugLogEntry {
     pub events: Vec<Event>,
     pub data: Option<Binary>,
 }
+
+impl fmt::Display for DebugLogEntry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", to_string(&self).unwrap())?;
+        Ok(())
+    }
+}
+
 
 impl DebugLog {
     pub fn new() -> Self {
