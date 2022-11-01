@@ -4,11 +4,13 @@ Simulation tool of Cosmwasm smart contract
 # Dependencies
 ```shell script
 apt-get install protobuf-compiler
+apt-get install python3-dev
+pip install maturin
 ```
 
 # Build
 ```shell script
-cargo build
+maturin build
 ```
 
 # TODO
