@@ -1,18 +1,19 @@
-use cosmwasm_simulate::{Addr, Coin, DebugLog, Model, Timestamp, Uint128};
+use cosmwasm_simulate::{Addr, Coin, Timestamp, Uint128};
+// we don't import Model and DebugLog in order to use their names for Python classes
 use pyo3::{exceptions::PyRuntimeError, prelude::*};
 
 #[pyclass]
-struct ModelClass {
-    inner: Model,
+struct Model {
+    inner: cosmwasm_simulate::Model,
 }
 
 #[pyclass]
-struct DebugLogClass {
-    inner: DebugLog,
+struct DebugLog {
+    inner: cosmwasm_simulate::DebugLog,
 }
 
 #[pymethods]
-impl DebugLogClass {
+impl DebugLog {
     fn get_log(self_: PyRefMut<Self>) -> PyResult<Vec<String>> {
         let debug_log = &self_.inner;
         let mut out = Vec::new();
@@ -38,16 +39,12 @@ impl DebugLogClass {
 }
 
 #[pymethods]
-impl ModelClass {
+impl Model {
     #[new]
-    fn new(
-        rpc_url: String,
-        block_number: Option<u64>,
-        bech32_prefix: String,
-    ) -> PyResult<ModelClass> {
-        let model = Model::new(&rpc_url, block_number, &bech32_prefix)
+    fn new(rpc_url: String, block_number: Option<u64>, bech32_prefix: String) -> PyResult<Model> {
+        let model = cosmwasm_simulate::Model::new(&rpc_url, block_number, &bech32_prefix)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-        Ok(ModelClass { inner: model })
+        Ok(Model { inner: model })
     }
 
     pub fn instantiate(
@@ -55,7 +52,7 @@ impl ModelClass {
         code_id: u64,
         msg: &[u8],
         funds_: Vec<(String, u128)>,
-    ) -> PyResult<DebugLogClass> {
+    ) -> PyResult<DebugLog> {
         let model = &mut self_.inner;
         let funds: Vec<Coin> = funds_
             .iter()
@@ -67,7 +64,7 @@ impl ModelClass {
         let debug_log = model
             .instantiate(code_id, msg, &funds)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-        Ok(DebugLogClass { inner: debug_log })
+        Ok(DebugLog { inner: debug_log })
     }
 
     pub fn execute(
@@ -75,7 +72,7 @@ impl ModelClass {
         contract_addr_: &str,
         msg: &[u8],
         funds_: Vec<(String, u128)>,
-    ) -> PyResult<DebugLogClass> {
+    ) -> PyResult<DebugLog> {
         let model = &mut self_.inner;
         let funds: Vec<Coin> = funds_
             .iter()
@@ -88,7 +85,7 @@ impl ModelClass {
         let debug_log = model
             .execute(&contract_addr, msg, &funds)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-        Ok(DebugLogClass { inner: debug_log })
+        Ok(DebugLog { inner: debug_log })
     }
 
     pub fn cheat_block_number(mut self_: PyRefMut<Self>, block_number: u64) -> PyResult<()> {
@@ -144,6 +141,8 @@ impl ModelClass {
 
 /// CosmWasm Simulator framework with Python bindings
 #[pymodule]
-fn cwsimpy(_py: Python, _m: &PyModule) -> PyResult<()> {
+fn cwsimpy(_py: Python, m: &PyModule) -> PyResult<()> {
+    m.add_class::<Model>()?;
+    m.add_class::<DebugLog>()?;
     Ok(())
 }
