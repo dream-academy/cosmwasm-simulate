@@ -109,7 +109,7 @@ impl Clone for RpcCache {
             Self::FileBacked {
                 db,
                 file_name,
-                file,
+                file: _,
             } => Self::FileBacked {
                 db: db.clone(),
                 file_name: file_name.clone(),
