@@ -2,7 +2,7 @@ use cosmwasm_schema::{cw_serde, QueryResponses};
 
 #[cw_serde]
 pub struct InstantiateMsg {
-    pub code_id: u64,
+    pub code_id: u128,
 }
 
 #[cw_serde]
@@ -10,7 +10,7 @@ pub struct CalleeInstantiateMsg {}
 
 #[cw_serde]
 pub enum ExecuteMsg {
-    CallRoot0 {},
+    Flow {},
 }
 
 #[cw_serde]

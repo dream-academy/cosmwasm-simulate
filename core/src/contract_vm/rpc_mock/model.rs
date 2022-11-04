@@ -5,8 +5,8 @@ use crate::contract_vm::rpc_mock::{
 use crate::contract_vm::Error;
 
 use cosmwasm_std::{
-    Addr, BankMsg, Binary, Coin, ContractInfo, ContractResult, CosmosMsg, Env, Reply, ReplyOn,
-    Response, SubMsgResponse, SubMsgResult, Timestamp, Uint128, WasmMsg, WasmQuery,
+    Addr, BankMsg, Binary, Coin, ContractInfo, ContractResult, CosmosMsg, Env, Event, Reply,
+    ReplyOn, Response, SubMsgResponse, SubMsgResult, Timestamp, Uint128, WasmMsg, WasmQuery,
 };
 use cosmwasm_vm::{Backend, InstanceOptions, Storage};
 use dashmap::DashMap;
@@ -113,7 +113,7 @@ impl Model {
     }
 
     fn create_instance(&mut self, contract_addr: &Addr) -> Result<(), Error> {
-        let deps = self.new_mock(&contract_addr, &self.debug_log)?;
+        let deps = self.new_mock(Some(contract_addr), &self.debug_log)?;
         let options = InstanceOptions {
             gas_limit: u64::MAX,
             print_debug: false,
@@ -313,7 +313,8 @@ impl Model {
         };
         drop(bank);
 
-        let deps = self.new_mock(contract_addr, &self.debug_log)?;
+        // because contract address does not exist on chain, create mock storage from empty set
+        let deps = self.new_mock(None, &self.debug_log)?;
         let options = InstanceOptions {
             gas_limit: u64::MAX,
             print_debug: false,
@@ -334,6 +335,10 @@ impl Model {
         // propagate contract error downwards
         let response = match instance.instantiate(&env, msg, &sender, funds)? {
             ContractResult::Ok(r) => {
+                let instantiate_event = Event::new("instantiate")
+                    .add_attribute("code_id", code_id.to_string())
+                    .add_attribute("_contract_address", contract_addr.to_string());
+                let r = r.add_event(instantiate_event);
                 self.debug_log.lock().unwrap().append_log(&r);
                 r
             }
@@ -398,7 +403,9 @@ impl Model {
         drop(bank);
 
         // execute contract code
-        let mut instance = self.instances.get_mut(contract_addr).unwrap();
+        // clone the instance so that self.instances is unlocked, insert the new instance before returning
+        // use an immutable reference (self.instances.get) to prevent deadlocking with querier
+        let mut instance = self.instances.get(contract_addr).unwrap().clone();
         // propagate contract error downwards
         let response = match instance.execute(&env, msg, &sender, funds)? {
             ContractResult::Ok(r) => {
@@ -406,11 +413,12 @@ impl Model {
                 r
             }
             ContractResult::Err(e) => {
+                // no need to insert the instance back into self.instances, because the entire state (model) will be reverted
                 self.debug_log.lock().unwrap().set_err_msg(&e);
                 return Ok(ContractResult::Err(e));
             }
         };
-        drop(instance);
+        self.instances.insert(contract_addr.clone(), instance);
         self.handle_response(contract_addr, &response)
     }
 
@@ -439,7 +447,7 @@ impl Model {
 
     fn new_mock(
         &self,
-        contract_addr: &Addr,
+        contract_addr: Option<&Addr>,
         debug_log: &Arc<Mutex<DebugLog>>,
     ) -> Result<RpcBackend, Error> {
         Ok(Backend {
@@ -466,15 +474,17 @@ impl Model {
         })
     }
 
-    fn mock_storage(&self, contract_addr: &Addr) -> Result<RpcMockStorage, Error> {
+    fn mock_storage(&self, contract_addr: Option<&Addr>) -> Result<RpcMockStorage, Error> {
         let mut storage = RpcMockStorage::new();
-        let mut client = self.client.lock().unwrap();
-        let states = client.query_wasm_contract_all(contract_addr.as_str())?;
-        for (k, v) in states {
-            storage
-                .set(k.as_slice(), v.as_slice())
-                .0
-                .map_err(|x| Error::vm_error(x))?;
+        if let Some(contract_addr) = contract_addr {
+            let mut client = self.client.lock().unwrap();
+            let states = client.query_wasm_contract_all(contract_addr.as_str())?;
+            for (k, v) in states {
+                storage
+                    .set(k.as_slice(), v.as_slice())
+                    .0
+                    .map_err(|x| Error::vm_error(x))?;
+            }
         }
         Ok(storage)
     }
