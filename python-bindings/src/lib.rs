@@ -101,6 +101,14 @@ impl Model {
         Ok(out.to_vec())
     }
 
+    pub fn bank_query(mut self_: PyRefMut<Self>, msg: &[u8]) -> PyResult<Vec<u8>> {
+        let model = &mut self_.inner;
+        let out = model
+            .bank_query(msg)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        Ok(out.to_vec())
+    }
+
     pub fn cheat_block_number(mut self_: PyRefMut<Self>, block_number: u64) -> PyResult<()> {
         let model = &mut self_.inner;
         model

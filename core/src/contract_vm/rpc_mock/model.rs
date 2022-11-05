@@ -8,9 +8,9 @@ use crate::rpc_items;
 use crate::rpc_mock::{ContractState, ContractStorage};
 
 use cosmwasm_std::{
-    Addr, BankMsg, BankQuery, Binary, Coin, ContractInfo, ContractResult, CosmosMsg, Env, Event,
-    Order, Reply, ReplyOn, Response, SubMsgResponse, SubMsgResult, Timestamp, Uint128, WasmMsg,
-    WasmQuery,
+    from_binary, Addr, BankMsg, BankQuery, Binary, Coin, ContractInfo, ContractResult, CosmosMsg,
+    Env, Event, Order, Reply, ReplyOn, Response, SubMsgResponse, SubMsgResult, Timestamp, Uint128,
+    WasmMsg, WasmQuery,
 };
 use cosmwasm_vm::{Backend, InstanceOptions, Storage};
 use prost::Message;
@@ -553,8 +553,10 @@ impl Model {
         Ok(result)
     }
 
-    pub fn bank_query(&mut self, bank_query: &BankQuery) -> Result<Binary, Error> {
-        self.states.write().unwrap().bank_query(bank_query)
+    pub fn bank_query(&mut self, bank_query_: &[u8]) -> Result<Binary, Error> {
+        let bank_query: BankQuery =
+            from_binary(&Binary::from(bank_query_)).map_err(|e| Error::serialization_error(e))?;
+        self.states.write().unwrap().bank_query(&bank_query)
     }
 
     fn new_mock(&self, contract_storage: &ContractStorage) -> Result<RpcBackend, Error> {
@@ -680,7 +682,7 @@ impl Model {
 #[cfg(test)]
 mod test {
 
-    use cosmwasm_std::{Addr, BalanceResponse, BankQuery, Coin, Uint128};
+    use cosmwasm_std::{to_binary, Addr, BalanceResponse, BankQuery, Coin, Uint128};
     use serde_json::json;
     use std::str::FromStr;
 
@@ -735,7 +737,9 @@ mod test {
             address: my_address.clone(),
             denom: "umlg".to_string(),
         };
-        let resp = model.bank_query(&bank_query).unwrap();
+        let resp = model
+            .bank_query(to_binary(&bank_query).unwrap().as_slice())
+            .unwrap();
         let resp_bank: BalanceResponse = serde_json::from_slice(resp.as_slice()).unwrap();
         let umlg_balance_before: u128 = resp_bank.amount.amount.into();
         let prev_block_num = model.states.read().unwrap().block_number;
@@ -757,7 +761,9 @@ mod test {
             .unwrap();
         let resp_json: serde_json::Value = serde_json::from_slice(resp.as_slice()).unwrap();
         let token_balance_after = u128::from_str(resp_json["balance"].as_str().unwrap()).unwrap();
-        let resp = model.bank_query(&bank_query).unwrap();
+        let resp = model
+            .bank_query(to_binary(&bank_query).unwrap().as_slice())
+            .unwrap();
         let resp_bank: BalanceResponse = serde_json::from_slice(resp.as_slice()).unwrap();
         let umlg_balance_after: u128 = resp_bank.amount.amount.into();
 

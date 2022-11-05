@@ -141,3 +141,35 @@ Afterwards, compile the contract and use `cheat_code` to overwrite existing code
 logs = m.execute(PAIR_ADDR, swap_msg, [("umlg", 100)])
 print("stdout1: {}".format(logs.get_stdout()))
 ```
+
+# Internals
+
+## Model
+
+Model refers to the collection of all states, including bank balances, contract code informations, and contract states. However, a model does not store `Instance`s for accessibility reasons. For example, during the execution of a contract, it may query itself. This causes the acquisition of that `Instance` to occur twice, which will either cause the thread to deadlock or panic due to borrow issues.Thus, a model only stores the states and codes and creates an instance only when it needs to execute WASM code.
+
+```rust
+pub struct AllStates {
+    contract_states: Arc<DashMap<Addr, ContractState>>,
+    bank_state: Arc<DashMap<Addr, HashMap<String, Uint128>>>
+}
+
+pub struct Model {
+    states: AllStates,
+    client: Arc<Mutex<CwRpcClient>>,
+    // similar to tx.origin of solidity
+    sender: String,
+    // used to generate addresses in instantiate
+    code_id_counters: HashMap<u64, u64>,
+
+    // fields related to blockchain environment
+    block_number: u64,
+    block_timestamp: Timestamp,
+    chain_id: String,
+    canonical_address_length: usize,
+    bech32_prefix: String,
+
+    // for debugging
+    debug_log: Arc<Mutex<DebugLog>>,
+}
+```

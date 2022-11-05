@@ -15,9 +15,7 @@ pub enum ExecuteMsg {
 
 #[cw_serde]
 pub enum CalleeExecuteMsg {
-    CallLeaf {
-        succeed: bool,
-    },
+    CallLeaf { succeed: bool },
 }
 
 #[cw_serde]

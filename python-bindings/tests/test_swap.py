@@ -70,3 +70,14 @@ if __name__ == "__main__":
         json.loads(decode_vec(m.wasm_query(TOKEN_ADDR, balance_query_msg)))["balance"]
     )
     print("spent tokens: {}".format(bal2 - bal3))
+
+    msg = json.dumps(
+        {
+            "balance": {
+                "address": MY_ADDRESS,
+                "denom": "umlg",
+            }
+        }
+    ).encode()
+    bal_umlg = bytearray(m.bank_query(msg)).decode()
+    print(bal_umlg)
