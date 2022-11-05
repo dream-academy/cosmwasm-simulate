@@ -51,7 +51,9 @@ if __name__ == "__main__":
     query_msg = json.dumps({"balance": {"address": addr2}}).encode()
 
     owner_balance = int(
-        json.loads(bytearray(m.query(TOKEN_ADDR, query_msg)).decode("ascii"))["balance"]
+        json.loads(bytearray(m.wasm_query(TOKEN_ADDR, query_msg)).decode("ascii"))[
+            "balance"
+        ]
     )
     assert owner_balance == 10**20
 
@@ -72,7 +74,7 @@ if __name__ == "__main__":
 
     query_msg = json.dumps({"config": {}}).encode()
     factory_owner = json.loads(
-        bytearray(m.query(FACTORY_ADDR, query_msg)).decode("ascii")
+        bytearray(m.wasm_query(FACTORY_ADDR, query_msg)).decode("ascii")
     )["owner"]
     assert factory_owner == addr2
 
@@ -92,8 +94,13 @@ if __name__ == "__main__":
             }
         }
     ).encode()
-    res = m.execute(FACTORY_ADDR, execute_msg, [])
     print(FACTORY_ADDR)
     print(TOKEN_ADDR)
+
+    FACTORY_CODE_PATH = "/home/procfs/terraswap/target/wasm32-unknown-unknown/release/terraswap_factory.wasm"
+    with open(FACTORY_CODE_PATH, "rb") as f:
+        FACTORY_CODE = f.read()
+    # m.cheat_code(FACTORY_ADDR, FACTORY_CODE)
+    res = m.execute(FACTORY_ADDR, execute_msg, [])
     print(res.get_log())
     print(res.get_err_msg())

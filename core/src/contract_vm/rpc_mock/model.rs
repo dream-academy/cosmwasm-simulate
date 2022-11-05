@@ -4,6 +4,7 @@ use crate::contract_vm::rpc_mock::{
     RpcMockStorage,
 };
 use crate::contract_vm::Error;
+use crate::rpc_items;
 use crate::rpc_mock::{ContractState, ContractStorage};
 
 use cosmwasm_std::{
@@ -12,6 +13,7 @@ use cosmwasm_std::{
     WasmQuery,
 };
 use cosmwasm_vm::{Backend, InstanceOptions, Storage};
+use prost::Message;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::mem;
@@ -142,6 +144,139 @@ impl Model {
         Ok(RpcContractInstance::new(&contract_addr, wasm_instance))
     }
 
+    fn handle_submessage_instantiate(
+        &mut self,
+        admin: &Option<String>,
+        origin: &Addr,
+        code_id: u64,
+        msg: &Binary,
+        funds: &Vec<Coin>,
+        sub_msg_id: u64,
+        reply_on: &ReplyOn,
+    ) -> Result<ContractResult<Response>, Error> {
+        let (response, new_addr) = match admin {
+            Some(allowed) => {
+                if allowed != origin {
+                    (
+                        ContractResult::Err("cannot instantiate contract".to_string()),
+                        None,
+                    )
+                } else {
+                    let (res, new_addr) = self.instantiate_inner(code_id, &origin, msg, funds)?;
+                    (res, new_addr)
+                }
+            }
+            None => {
+                let (res, new_addr) = self.instantiate_inner(code_id, &origin, msg, funds)?;
+                (res, new_addr)
+            }
+        };
+        let do_reply = match reply_on {
+            ReplyOn::Always => true,
+            ReplyOn::Success => response.is_ok(),
+            ReplyOn::Error => response.is_err(),
+            ReplyOn::Never => false,
+        };
+        if do_reply {
+            let data = rpc_items::cosmwasm::wasm::v1::MsgInstantiateContractResponse {
+                address: if let Some(a) = new_addr {
+                    a.to_string()
+                } else {
+                    "".to_string()
+                },
+                data: Vec::new(),
+            };
+            let reply = Reply {
+                id: sub_msg_id,
+                result: match response {
+                    ContractResult::Ok(r) => SubMsgResult::Ok(SubMsgResponse {
+                        events: r.events,
+                        data: Some(Binary::from(Message::encode_to_vec(&data))),
+                    }),
+                    ContractResult::Err(e) => SubMsgResult::Err(e),
+                },
+            };
+
+            let mut instance = self.create_instance(origin)?;
+            let env = self.env(origin)?;
+            let maybe_response = instance.reply(&env, &reply)?;
+            self.handle_instance(origin, instance)?;
+
+            if maybe_response.is_err() {
+                // propagate error. instance.reply need not error handling
+                // no need to re-insert the instance
+                Ok(maybe_response)
+            } else {
+                let response = maybe_response.unwrap();
+                self.debug_log.lock().unwrap().append_log(&response);
+                self.handle_response(origin, &response)
+            }
+        }
+        // if reply is not called, but the current result is an error, propagate the error
+        else if response.is_err() {
+            Ok(ContractResult::Err(response.unwrap_err()))
+        }
+        // otherwise, recursively handle the submessages
+        else {
+            self.handle_response(origin, &response.unwrap())
+        }
+    }
+
+    fn handle_submessage_execute(
+        &mut self,
+        origin: &Addr,
+        target_addr: &Addr,
+        msg: &Binary,
+        funds: &Vec<Coin>,
+        sub_msg_id: u64,
+        reply_on: &ReplyOn,
+    ) -> Result<ContractResult<Response>, Error> {
+        let response = self.execute_inner(&target_addr, &origin, msg.as_slice(), funds)?;
+        let do_reply = match reply_on {
+            ReplyOn::Always => true,
+            ReplyOn::Success => response.is_ok(),
+            ReplyOn::Error => response.is_err(),
+            ReplyOn::Never => false,
+        };
+        if do_reply {
+            let data =
+                rpc_items::cosmwasm::wasm::v1::MsgExecuteContractResponse { data: Vec::new() };
+            let env = self.env(origin)?;
+            let reply = Reply {
+                id: sub_msg_id,
+                result: match response {
+                    ContractResult::Ok(r) => SubMsgResult::Ok(SubMsgResponse {
+                        events: r.events,
+                        data: Some(Binary::from(Message::encode_to_vec(&data))),
+                    }),
+                    ContractResult::Err(e) => SubMsgResult::Err(e),
+                },
+            };
+
+            let mut instance = self.create_instance(origin)?;
+            let maybe_response = instance.reply(&env, &reply)?;
+            self.handle_instance(origin, instance)?;
+
+            if maybe_response.is_err() {
+                // propagate error. instance.reply need not error handling
+                // no need to re-insert the instance
+                Ok(maybe_response)
+            } else {
+                let response = maybe_response.unwrap();
+                self.debug_log.lock().unwrap().append_log(&response);
+                self.handle_response(origin, &response)
+            }
+        }
+        // if reply is not called, but the current result is an error, propagate the error
+        else if response.is_err() {
+            Ok(ContractResult::Err(response.unwrap_err()))
+        }
+        // otherwise, recursively handle the submessages
+        else {
+            self.handle_response(origin, &response.unwrap())
+        }
+    }
+
     fn handle_response(
         &mut self,
         origin: &Addr,
@@ -164,25 +299,27 @@ impl Model {
                         msg,
                         funds,
                         label: _,
-                    } => {
-                        match admin {
-                            Some(_) => unimplemented!(),
-                            None => {}
-                        }
-                        // generate contract address automatically
-
-                        let (res, _) = self.instantiate_inner(*code_id, &origin, msg, funds)?;
-                        res
-                    }
+                    } => self.handle_submessage_instantiate(
+                        admin,
+                        origin,
+                        *code_id,
+                        msg,
+                        funds,
+                        sub_msg.id,
+                        &sub_msg.reply_on,
+                    )?,
                     WasmMsg::Execute {
                         contract_addr: target_addr,
                         msg,
                         funds,
-                    } => {
-                        let target_addr = Addr::unchecked(target_addr);
-
-                        self.execute_inner(&target_addr, &origin, msg.as_slice(), funds)?
-                    }
+                    } => self.handle_submessage_execute(
+                        origin,
+                        &Addr::unchecked(target_addr),
+                        msg,
+                        funds,
+                        sub_msg.id,
+                        &sub_msg.reply_on,
+                    )?,
                     _ => unimplemented!(),
                 },
                 CosmosMsg::Bank(bank_msg) => {
@@ -194,48 +331,11 @@ impl Model {
                 }
                 _ => unimplemented!(),
             };
-            let do_reply = match &sub_msg.reply_on {
-                ReplyOn::Always => true,
-                ReplyOn::Success => response.is_ok(),
-                ReplyOn::Error => response.is_err(),
-                ReplyOn::Never => false,
-            };
-            // call reply(), and recursively handle response
-            last_response = if do_reply {
-                let env = self.env(origin)?;
-                let reply = Reply {
-                    id: sub_msg.id,
-                    result: match response {
-                        ContractResult::Ok(r) => SubMsgResult::Ok(SubMsgResponse {
-                            events: r.events,
-                            data: r.data,
-                        }),
-                        ContractResult::Err(e) => SubMsgResult::Err(e),
-                    },
-                };
-
-                let mut instance = self.create_instance(origin)?;
-                let maybe_response = instance.reply(&env, &reply)?;
-                self.handle_instance(origin, instance)?;
-
-                if maybe_response.is_err() {
-                    // propagate error. instance.reply need not error handling
-                    // no need to re-insert the instance
-                    return Ok(maybe_response);
-                } else {
-                    let response = maybe_response.unwrap();
-                    self.debug_log.lock().unwrap().append_log(&response);
-                    self.handle_response(origin, &response)?
-                }
+            if response.is_err() {
+                return Ok(response);
+            } else {
+                last_response = response;
             }
-            // if reply is not called, but the current result is an error, propagate the error
-            else if response.is_err() {
-                return Ok(ContractResult::Err(response.unwrap_err()));
-            }
-            // otherwise, recursively handle the submessages
-            else {
-                self.handle_response(origin, &response.unwrap())?
-            };
         }
         Ok(last_response)
     }
@@ -337,6 +437,15 @@ impl Model {
                 }
                 Ok(i) => i,
             };
+        // create a temporary contract_state, which will be deleted if instantiation fails
+        let contract_state = ContractState {
+            code: wasm_code,
+            storage: ContractStorage::new(),
+        };
+        self.states
+            .write()
+            .unwrap()
+            .contract_state_insert(contract_addr.clone(), contract_state);
         let mut instance = RpcContractInstance::new(&contract_addr, wasm_instance);
         let env = self.env(&contract_addr)?;
         // propagate contract error downwards
@@ -350,6 +459,11 @@ impl Model {
                 r
             }
             ContractResult::Err(e) => {
+                // remove the temporary contract_state created previously
+                self.states
+                    .write()
+                    .unwrap()
+                    .contract_state_remove(&contract_addr);
                 self.debug_log.lock().unwrap().set_err_msg(&e);
                 return Ok((ContractResult::Err(e), None));
             }

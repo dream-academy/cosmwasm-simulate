@@ -40,11 +40,11 @@ if __name__ == "__main__":
         }
     ).encode()
     bal1 = int(
-        json.loads(decode_vec(m.query(TOKEN_ADDR, balance_query_msg)))["balance"]
+        json.loads(decode_vec(m.wasm_query(TOKEN_ADDR, balance_query_msg)))["balance"]
     )
     logs = m.execute(PAIR_ADDR, swap_msg, [("umlg", 100)])
     bal2 = int(
-        json.loads(decode_vec(m.query(TOKEN_ADDR, balance_query_msg)))["balance"]
+        json.loads(decode_vec(m.wasm_query(TOKEN_ADDR, balance_query_msg)))["balance"]
     )
     print("got tokens: {}".format(bal2 - bal1))
 
@@ -67,6 +67,6 @@ if __name__ == "__main__":
     ).encode()
     logs = m.execute(TOKEN_ADDR, swap_msg, [])
     bal3 = int(
-        json.loads(decode_vec(m.query(TOKEN_ADDR, balance_query_msg)))["balance"]
+        json.loads(decode_vec(m.wasm_query(TOKEN_ADDR, balance_query_msg)))["balance"]
     )
     print("spent tokens: {}".format(bal2 - bal3))

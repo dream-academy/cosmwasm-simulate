@@ -6,6 +6,7 @@ fn main() -> Result<()> {
         &[
             "proto/cosmos/bank/v1beta1/query.proto",
             "proto/cosmwasm/wasm/v1/query.proto",
+            "proto/cosmwasm/wasm/v1/tx.proto",
         ],
         &["proto"],
     )?;

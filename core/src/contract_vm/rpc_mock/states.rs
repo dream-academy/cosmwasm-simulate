@@ -56,6 +56,10 @@ impl AllStates {
         self.contract_states.insert(contract_addr, contract_state);
     }
 
+    pub fn contract_state_remove(&mut self, contract_addr: &Addr) {
+        self.contract_states.remove(contract_addr);
+    }
+
     pub fn contract_storage_update(&mut self, contract_addr: &Addr, new_storage: ContractStorage) {
         self.contract_states.get_mut(contract_addr).unwrap().storage = new_storage;
     }

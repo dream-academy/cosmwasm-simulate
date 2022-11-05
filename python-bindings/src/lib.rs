@@ -88,11 +88,15 @@ impl Model {
         Ok(DebugLog { inner: debug_log })
     }
 
-    pub fn query(mut self_: PyRefMut<Self>, contract_addr_: &str, msg: &[u8]) -> PyResult<Vec<u8>> {
+    pub fn wasm_query(
+        mut self_: PyRefMut<Self>,
+        contract_addr_: &str,
+        msg: &[u8],
+    ) -> PyResult<Vec<u8>> {
         let model = &mut self_.inner;
         let contract_addr = Addr::unchecked(contract_addr_);
         let out = model
-            .query_wasm(&contract_addr, msg)
+            .wasm_query(&contract_addr, msg)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         Ok(out.to_vec())
     }

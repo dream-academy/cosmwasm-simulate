@@ -2,14 +2,13 @@ use crate::contract_vm::rpc_mock::{AllStates, DebugLog, RpcContractInstance};
 use crate::rpc_mock::{ContractState, RpcMockApi, RpcMockStorage};
 use crate::Error;
 use cosmwasm_std::{
-    from_binary, from_slice, to_binary, Addr, Binary, BlockInfo, ContractInfo, ContractResult, Env,
-    QueryRequest, SystemResult, Timestamp, WasmQuery,
+    from_binary, from_slice, to_binary, Addr, Binary, ContractInfo, ContractResult, Env,
+    QueryRequest, SystemResult, WasmQuery,
 };
 use cosmwasm_vm::{
     Backend, BackendError, BackendResult, GasInfo, InstanceOptions, Querier, Storage,
 };
 use serde::{Deserialize, Serialize};
-use tendermint::Block;
 
 use std::sync::{Arc, Mutex, RwLock};
 

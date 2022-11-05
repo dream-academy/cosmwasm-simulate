@@ -22,44 +22,11 @@ use tendermint::Time;
 use tendermint_rpc::{Client, HttpClient};
 use tokio;
 
-use crate::contract_vm::error::Error;
+use crate::Error;
 
-use self::rpc_items::cosmwasm::wasm;
-
-macro_rules! include_proto {
-    ($x: literal) => {
-        include!(concat!(env!("OUT_DIR"), "/", $x, ".rs"));
-    };
-}
+use crate::contract_vm::rpc_items::cosmwasm::wasm;
 
 const RPC_CACHE_DIRNAME: &str = ".cw-rpc-cache";
-
-pub mod rpc_items {
-    pub mod cosmwasm {
-        pub mod wasm {
-            pub mod v1 {
-                include_proto!("cosmwasm.wasm.v1");
-            }
-        }
-    }
-    pub mod cosmos {
-        pub mod base {
-            pub mod v1beta1 {
-                include_proto!("cosmos.base.v1beta1");
-            }
-            pub mod query {
-                pub mod v1beta1 {
-                    include_proto!("cosmos.base.query.v1beta1");
-                }
-            }
-        }
-        pub mod bank {
-            pub mod v1beta1 {
-                include_proto!("cosmos.bank.v1beta1");
-            }
-        }
-    }
-}
 
 fn rwopen<P: AsRef<Path>>(path: P) -> std::io::Result<fs::File> {
     OpenOptions::new()
@@ -309,8 +276,8 @@ impl CwRpcClient {
     }
 
     pub fn query_bank_all_balances(&mut self, address: &str) -> Result<Vec<(String, u128)>, Error> {
-        use crate::contract_vm::rpc_mock::rpc::rpc_items::cosmos::bank::v1beta1::QueryAllBalancesRequest;
-        use crate::contract_vm::rpc_mock::rpc::rpc_items::cosmos::bank::v1beta1::QueryAllBalancesResponse;
+        use crate::contract_vm::rpc_items::cosmos::bank::v1beta1::QueryAllBalancesRequest;
+        use crate::contract_vm::rpc_items::cosmos::bank::v1beta1::QueryAllBalancesResponse;
         let request = QueryAllBalancesRequest {
             address: address.to_string(),
             pagination: None,
@@ -337,8 +304,8 @@ impl CwRpcClient {
         address: &str,
         query_data: &[u8],
     ) -> Result<Vec<u8>, Error> {
-        use crate::contract_vm::rpc_mock::rpc::rpc_items::cosmwasm::wasm::v1::QuerySmartContractStateRequest;
-        use crate::contract_vm::rpc_mock::rpc::rpc_items::cosmwasm::wasm::v1::QuerySmartContractStateResponse;
+        use crate::contract_vm::rpc_items::cosmwasm::wasm::v1::QuerySmartContractStateRequest;
+        use crate::contract_vm::rpc_items::cosmwasm::wasm::v1::QuerySmartContractStateResponse;
         let request = QuerySmartContractStateRequest {
             address: address.to_string(),
             query_data: query_data.to_vec(),
@@ -359,8 +326,8 @@ impl CwRpcClient {
         &mut self,
         address: &str,
     ) -> Result<HashMap<Vec<u8>, Vec<u8>>, Error> {
-        use crate::contract_vm::rpc_mock::rpc::rpc_items::cosmwasm::wasm::v1::QueryAllContractStateRequest;
-        use crate::contract_vm::rpc_mock::rpc::rpc_items::cosmwasm::wasm::v1::QueryAllContractStateResponse;
+        use crate::contract_vm::rpc_items::cosmwasm::wasm::v1::QueryAllContractStateRequest;
+        use crate::contract_vm::rpc_items::cosmwasm::wasm::v1::QueryAllContractStateResponse;
         let request = QueryAllContractStateRequest {
             address: address.to_string(),
             pagination: None,
@@ -385,8 +352,8 @@ impl CwRpcClient {
         &mut self,
         address: &str,
     ) -> Result<wasm::v1::ContractInfo, Error> {
-        use crate::contract_vm::rpc_mock::rpc::rpc_items::cosmwasm::wasm::v1::QueryContractInfoRequest;
-        use crate::contract_vm::rpc_mock::rpc::rpc_items::cosmwasm::wasm::v1::QueryContractInfoResponse;
+        use crate::contract_vm::rpc_items::cosmwasm::wasm::v1::QueryContractInfoRequest;
+        use crate::contract_vm::rpc_items::cosmwasm::wasm::v1::QueryContractInfoResponse;
         let request = QueryContractInfoRequest {
             address: address.to_string(),
         };
@@ -410,8 +377,8 @@ impl CwRpcClient {
     }
 
     pub fn query_wasm_contract_code(&mut self, code_id: u64) -> Result<Vec<u8>, Error> {
-        use crate::contract_vm::rpc_mock::rpc::rpc_items::cosmwasm::wasm::v1::QueryCodeRequest;
-        use crate::contract_vm::rpc_mock::rpc::rpc_items::cosmwasm::wasm::v1::QueryCodeResponse;
+        use crate::contract_vm::rpc_items::cosmwasm::wasm::v1::QueryCodeRequest;
+        use crate::contract_vm::rpc_items::cosmwasm::wasm::v1::QueryCodeResponse;
         let request = QueryCodeRequest { code_id: code_id };
         let path = "/cosmwasm.wasm.v1.Query/Code";
         let data = serialize(&request).unwrap();
