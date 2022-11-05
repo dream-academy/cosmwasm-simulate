@@ -11,6 +11,7 @@ pub enum Error {
     StdError(String),
     IoError(String),
     BankError(String),
+    BackendError(String),
 }
 
 impl Error {
@@ -49,6 +50,10 @@ impl Error {
     pub fn bank_error<T: ToString>(msg: T) -> Self {
         Self::BankError(msg.to_string())
     }
+
+    pub fn backend_error<T: ToString>(msg: T) -> Self {
+        Self::BackendError(msg.to_string())
+    }
 }
 
 impl fmt::Display for Error {
@@ -80,6 +85,9 @@ impl fmt::Display for Error {
             }
             Self::BankError(s) => {
                 writeln!(f, "bank error: {}", s)?;
+            }
+            Self::BackendError(s) => {
+                writeln!(f, "backend error: {}", s)?;
             }
         }
         Ok(())

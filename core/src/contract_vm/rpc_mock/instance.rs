@@ -78,8 +78,8 @@ impl RpcContractInstance {
                 contract_addr: _,
                 key,
             } => {
-                if let Some(value) = self
-                    .instance
+                let mut instance_copy = self.instance.clone();
+                if let Some(value) = instance_copy
                     .with_storage(|s| {
                         let (res, _) = s.get(key.as_slice());
                         match res {

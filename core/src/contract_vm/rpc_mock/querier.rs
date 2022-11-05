@@ -1,25 +1,24 @@
-use crate::{
-    contract_vm::rpc_mock::{Bank, CwRpcClient, RpcContractInstance},
-    DebugLog,
-};
+use crate::contract_vm::rpc_mock::{AllStates, DebugLog, RpcContractInstance};
+use crate::rpc_mock::{ContractState, RpcMockApi, RpcMockStorage};
+use crate::Error;
 use cosmwasm_std::{
     from_binary, from_slice, to_binary, Addr, Binary, BlockInfo, ContractInfo, ContractResult, Env,
     QueryRequest, SystemResult, Timestamp, WasmQuery,
 };
-use cosmwasm_vm::{BackendError, BackendResult, GasInfo, Querier};
+use cosmwasm_vm::{
+    Backend, BackendError, BackendResult, GasInfo, InstanceOptions, Querier, Storage,
+};
 use serde::{Deserialize, Serialize};
+use tendermint::Block;
 
-use dashmap::DashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
-type Instances = DashMap<Addr, RpcContractInstance>;
+use super::model::maybe_unzip;
 
 #[derive(Clone)]
 pub struct RpcMockQuerier {
-    client: Arc<Mutex<CwRpcClient>>,
-    bank: Arc<Mutex<Bank>>,
+    states: Arc<RwLock<AllStates>>,
     debug_log: Arc<Mutex<DebugLog>>,
-    instances: Arc<Instances>,
 }
 
 const PRINTER_ADDR: &str = "supergodprinter";
@@ -32,6 +31,78 @@ struct PrintRequest {
 #[derive(Serialize, Deserialize)]
 struct PrintResponse {
     ack: bool,
+}
+
+impl RpcMockQuerier {
+    fn fetch_contract_state(&self, contract_addr: &Addr) -> Result<(), Error> {
+        if self
+            .states
+            .read()
+            .unwrap()
+            .contract_state_get(contract_addr)
+            .is_some()
+        {
+            return Ok(());
+        }
+        let contract_info = self
+            .states
+            .write()
+            .unwrap()
+            .client
+            .query_wasm_contract_info(contract_addr.as_str())?;
+        let wasm_code = maybe_unzip(
+            self.states
+                .write()
+                .unwrap()
+                .client
+                .query_wasm_contract_code(contract_info.code_id)?,
+        )?;
+        let contract_state = ContractState {
+            code: wasm_code,
+            storage: self
+                .states
+                .write()
+                .unwrap()
+                .client
+                .query_wasm_contract_all(contract_addr.as_str())?,
+        };
+        self.states
+            .write()
+            .unwrap()
+            .contract_state_insert(contract_addr.clone(), contract_state);
+        Ok(())
+    }
+
+    fn env(&self, contract_addr: &Addr) -> Result<Env, Error> {
+        let states = self.states.read().unwrap();
+        let block_number = states.block_number;
+        let block_timestamp = states.block_timestamp.clone();
+        let chain_id = states.chain_id.to_string();
+        Ok(Env {
+            block: cosmwasm_std::BlockInfo {
+                height: block_number,
+                time: block_timestamp,
+                chain_id,
+            },
+            // assumption: all blocks have only 1 transaction
+            transaction: Some(cosmwasm_std::TransactionInfo { index: 0 }),
+            // I don't really know what this is for, so for now, set it to the target contract address
+            contract: ContractInfo {
+                address: contract_addr.clone(),
+            },
+        })
+    }
+
+    fn mock_storage(&self, contract_state: &ContractState) -> Result<RpcMockStorage, Error> {
+        let mut storage = RpcMockStorage::new();
+        for (k, v) in contract_state.storage.iter() {
+            storage
+                .set(k.as_slice(), v.as_slice())
+                .0
+                .map_err(|x| Error::vm_error(x))?;
+        }
+        Ok(storage)
+    }
 }
 
 impl Querier for RpcMockQuerier {
@@ -51,8 +122,7 @@ impl Querier for RpcMockQuerier {
         };
         match request {
             QueryRequest::Bank(bank_query) => {
-                let mut bank = self.bank.lock().unwrap();
-                match bank.query(&bank_query) {
+                match self.states.write().unwrap().bank_query(&bank_query) {
                     Ok(resp) => {
                         (
                             // wait, is this correct?
@@ -91,83 +161,84 @@ impl Querier for RpcMockQuerier {
                             panic!("invalid query to printer");
                         }
                     }
-                } else if let Some(mut instance) = self.instances.get_mut(&contract_addr) {
-                    let env = Env {
-                        block: BlockInfo {
-                            // TODO: fix
-                            height: 0,
-                            time: Timestamp::from_nanos(0),
-                            chain_id: "chaind".to_string(),
-                        },
-                        transaction: None,
-                        contract: ContractInfo {
-                            address: Addr::unchecked(contract_addr),
-                        },
+                } else {
+                    if let Err(e) = self.fetch_contract_state(&contract_addr) {
+                        return (
+                            Err(BackendError::Unknown { msg: e.to_string() }),
+                            GasInfo::free(),
+                        );
+                    }
+                    let env = match self.env(&contract_addr) {
+                        Ok(e) => e,
+                        Err(e) => {
+                            return (
+                                Err(BackendError::Unknown { msg: e.to_string() }),
+                                GasInfo::free(),
+                            );
+                        }
                     };
+                    let contract_state = self
+                        .states
+                        .read()
+                        .unwrap()
+                        .contract_state_get(&contract_addr)
+                        .unwrap()
+                        .clone();
+                    let states = self.states.read().unwrap();
+                    let canonical_address_length = states.canonical_address_length;
+                    let bech32_prefix = states.bech32_prefix.to_string();
+                    let storage = match self.mock_storage(&contract_state) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            return (
+                                Err(BackendError::Unknown { msg: e.to_string() }),
+                                GasInfo::free(),
+                            );
+                        }
+                    };
+                    let api =
+                        match RpcMockApi::new(canonical_address_length, bech32_prefix.as_str()) {
+                            Ok(a) => a,
+                            Err(e) => {
+                                return (
+                                    Err(BackendError::Unknown { msg: e.to_string() }),
+                                    GasInfo::free(),
+                                );
+                            }
+                        };
+                    let deps = Backend {
+                        storage,
+                        api,
+                        querier: RpcMockQuerier::new(&self.states, &self.debug_log),
+                    };
+                    let options = InstanceOptions {
+                        gas_limit: u64::MAX,
+                        print_debug: false,
+                    };
+                    let wasm_instance = match cosmwasm_vm::Instance::from_code(
+                        contract_state.code.as_slice(),
+                        deps,
+                        options,
+                        None,
+                    ) {
+                        Err(e) => {
+                            return (
+                                Err(BackendError::Unknown { msg: e.to_string() }),
+                                GasInfo::free(),
+                            );
+                        }
+                        Ok(i) => i,
+                    };
+                    let mut instance = RpcContractInstance::new(&contract_addr, wasm_instance);
                     match instance.query(&env, &wasm_query) {
-                        Ok(b) => (Ok(SystemResult::Ok(ContractResult::Ok(b))), GasInfo::free()),
+                        Ok(response) => (
+                            Ok(SystemResult::Ok(ContractResult::Ok(response))),
+                            GasInfo::free(),
+                        ),
                         Err(e) => (
                             Err(BackendError::Unknown { msg: e.to_string() }),
                             GasInfo::free(),
                         ),
-                    }
-                } else {
-                    // instance is not created by model
-                    // since we do not have access to model, we can't create a new instance from here
-                    // but, it doesn't affect the integrity of the model, because whenever cheat codes are invoked,
-                    // it creates an instance and thus it must exist in the instances hashmap
-                    let mut client = self.client.lock().unwrap();
-                    match &wasm_query {
-                        WasmQuery::ContractInfo { contract_addr: _ } => {
-                            unimplemented!()
-                        }
-                        WasmQuery::Raw { contract_addr, key } => {
-                            let states = match client.query_wasm_contract_all(contract_addr) {
-                                Ok(s) => s,
-                                Err(e) => {
-                                    return (
-                                        Err(BackendError::Unknown { msg: e.to_string() }),
-                                        GasInfo::free(),
-                                    );
-                                }
-                            };
-                            let key = key.to_vec();
-                            if let Some(value) = states.get(&key) {
-                                (
-                                    Ok(SystemResult::Ok(ContractResult::Ok(Binary::from(
-                                        value.as_slice(),
-                                    )))),
-                                    GasInfo::free(),
-                                )
-                            } else {
-                                (
-                                    Ok(SystemResult::Ok(ContractResult::Ok(Binary::from(
-                                        vec![].as_slice(),
-                                    )))),
-                                    GasInfo::free(),
-                                )
-                            }
-                        }
-                        WasmQuery::Smart { contract_addr, msg } => {
-                            let response = match client
-                                .query_wasm_contract_smart(contract_addr, msg.as_slice())
-                            {
-                                Ok(resp) => resp,
-                                Err(e) => {
-                                    return (
-                                        Err(BackendError::Unknown { msg: e.to_string() }),
-                                        GasInfo::free(),
-                                    );
-                                }
-                            };
-                            (
-                                Ok(SystemResult::Ok(ContractResult::Ok(Binary::from(
-                                    response.as_slice(),
-                                )))),
-                                GasInfo::free(),
-                            )
-                        }
-                        _ => unimplemented!(),
                     }
                 }
             }
@@ -177,17 +248,10 @@ impl Querier for RpcMockQuerier {
 }
 
 impl RpcMockQuerier {
-    pub fn new(
-        client: &Arc<Mutex<CwRpcClient>>,
-        bank: &Arc<Mutex<Bank>>,
-        debug_log: &Arc<Mutex<DebugLog>>,
-        instances: &Arc<Instances>,
-    ) -> Self {
+    pub fn new(states: &Arc<RwLock<AllStates>>, debug_log: &Arc<Mutex<DebugLog>>) -> Self {
         Self {
-            client: Arc::clone(client),
-            bank: Arc::clone(bank),
-            debug_log: Arc::clone(debug_log),
-            instances: Arc::clone(instances),
+            states: states.clone(),
+            debug_log: debug_log.clone(),
         }
     }
 }

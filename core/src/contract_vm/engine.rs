@@ -12,7 +12,6 @@ use self::cosmwasm_vm::{Instance, InstanceOptions};
 use crate::contract_vm::{analyzer, mock};
 
 static DEFAULT_GAS_LIMIT: u64 = 500_000;
-static COMPILE_GAS_LIMIT: u64 = 10_000_000_000;
 
 pub struct ContractInstance {
     pub module: Module,
