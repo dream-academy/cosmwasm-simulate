@@ -13,7 +13,6 @@ use crate::contract_vm::Error;
 
 type RpcInstance = Instance<RpcMockApi, RpcMockStorage, RpcMockQuerier>;
 
-#[derive(Clone)]
 pub struct RpcContractInstance {
     contract_info: ContractInfo,
     instance: RpcInstance,
@@ -78,8 +77,8 @@ impl RpcContractInstance {
                 contract_addr: _,
                 key,
             } => {
-                let mut instance_copy = self.instance.clone();
-                if let Some(value) = instance_copy
+                if let Some(value) = self
+                    .instance
                     .with_storage(|s| {
                         let (res, _) = s.get(key.as_slice());
                         match res {
