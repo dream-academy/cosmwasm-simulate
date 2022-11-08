@@ -284,7 +284,7 @@ impl CwRpcClient {
         };
         let path = "/cosmos.bank.v1beta1.Query/AllBalances";
         let data = serialize(&request).unwrap();
-        let out = self.abci_query_raw(path, data.as_slice()).unwrap();
+        let out = self.abci_query_raw(path, data.as_slice())?;
         let resp = match QueryAllBalancesResponse::decode(out.as_slice()) {
             Ok(r) => r,
             Err(e) => {
@@ -312,7 +312,7 @@ impl CwRpcClient {
         };
         let path = "/cosmwasm.wasm.v1.Query/SmartContractState";
         let data = serialize(&request).unwrap();
-        let out = self.abci_query_raw(path, data.as_slice()).unwrap();
+        let out = self.abci_query_raw(path, data.as_slice())?;
         let resp = match QuerySmartContractStateResponse::decode(out.as_slice()) {
             Ok(r) => r,
             Err(e) => {
@@ -334,7 +334,7 @@ impl CwRpcClient {
         };
         let path = "/cosmwasm.wasm.v1.Query/AllContractState";
         let data = serialize(&request).unwrap();
-        let out = self.abci_query_raw(path, data.as_slice()).unwrap();
+        let out = self.abci_query_raw(path, data.as_slice())?;
         let resp = match QueryAllContractStateResponse::decode(out.as_slice()) {
             Ok(r) => r,
             Err(e) => {
@@ -357,9 +357,10 @@ impl CwRpcClient {
         let request = QueryContractInfoRequest {
             address: address.to_string(),
         };
+        println!("query address: {}", address);
         let path = "/cosmwasm.wasm.v1.Query/ContractInfo";
         let data = serialize(&request).unwrap();
-        let out = self.abci_query_raw(path, data.as_slice()).unwrap();
+        let out = self.abci_query_raw(path, data.as_slice())?;
         let resp = match QueryContractInfoResponse::decode(out.as_slice()) {
             Ok(r) => r,
             Err(e) => {
@@ -379,10 +380,10 @@ impl CwRpcClient {
     pub fn query_wasm_contract_code(&mut self, code_id: u64) -> Result<Vec<u8>, Error> {
         use crate::contract_vm::rpc_items::cosmwasm::wasm::v1::QueryCodeRequest;
         use crate::contract_vm::rpc_items::cosmwasm::wasm::v1::QueryCodeResponse;
-        let request = QueryCodeRequest { code_id: code_id };
+        let request = QueryCodeRequest { code_id };
         let path = "/cosmwasm.wasm.v1.Query/Code";
         let data = serialize(&request).unwrap();
-        let out = self.abci_query_raw(path, data.as_slice()).unwrap();
+        let out = self.abci_query_raw(path, data.as_slice())?;
         let resp = match QueryCodeResponse::decode(out.as_slice()) {
             Ok(r) => r,
             Err(e) => {
