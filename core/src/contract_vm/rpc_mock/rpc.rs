@@ -358,7 +358,6 @@ impl CwRpcClient {
         let request = QueryContractInfoRequest {
             address: address.to_string(),
         };
-        println!("query address: {}", address);
         let path = "/cosmwasm.wasm.v1.Query/ContractInfo";
         let data = serialize(&request).unwrap();
         let out = self.abci_query_raw(path, data.as_slice())?;
