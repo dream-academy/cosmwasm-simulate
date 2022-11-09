@@ -13,10 +13,18 @@ pub type ContractStorage = BTreeMap<Vec<u8>, Vec<u8>>;
 const BLOCK_EPOCH: u64 = 1_000_000_000;
 
 /// techically contract code is not part of contract state, but we just name it as 'state' for simplicity
-#[derive(Clone)]
 pub struct ContractState {
     pub code: Vec<u8>,
     pub storage: Arc<RwLock<ContractStorage>>,
+}
+
+impl Clone for ContractState {
+    fn clone(&self) -> Self {
+        Self {
+            code: self.code.clone(),
+            storage: Arc::new(RwLock::new(self.storage.read().unwrap().clone())),
+        }
+    }
 }
 
 #[derive(Clone)]

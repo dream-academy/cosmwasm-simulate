@@ -21,7 +21,6 @@ use std::sync::{Arc, Mutex, RwLock};
 
 pub type RpcBackend = Backend<RpcMockApi, RpcMockStorage, RpcMockQuerier>;
 
-#[derive(Clone)]
 pub struct Model {
     states: Arc<RwLock<AllStates>>,
     // similar to tx.origin of solidity
@@ -45,6 +44,17 @@ pub fn maybe_unzip(input: Vec<u8>) -> Result<Vec<u8>, Error> {
     } else {
         eprintln!("unidentifiable magic: {:?}", magic);
         unimplemented!();
+    }
+}
+
+impl Clone for Model {
+    fn clone(&self) -> Self {
+        Model {
+            states: Arc::new(RwLock::new(self.states.read().unwrap().clone())),
+            sender: self.sender.clone(),
+            code_id_counters: self.code_id_counters.clone(),
+            debug_log: Arc::new(Mutex::new(self.debug_log.lock().unwrap().clone())),
+        }
     }
 }
 
@@ -348,12 +358,14 @@ impl Model {
         let empty_log = DebugLog::new();
         let state_copy = self.clone();
 
-        self.instantiate_inner(code_id, &Addr::unchecked(sender), msg, funds)
-            .map_err(|e| {
-                // revert entire state
-                let _ = mem::replace(self, state_copy);
-                e
-            })?;
+        let (res, _) = self
+            .instantiate_inner(code_id, &Addr::unchecked(sender), msg, funds)
+            .map_err(|e| e)?;
+        if res.is_err() {
+            mem::drop(mem::replace(self, state_copy));
+        } else {
+            self.states.write().unwrap().update_block();
+        }
         self.states.write().unwrap().update_block();
         Ok(mem::replace(&mut self.debug_log.lock().unwrap(), empty_log))
     }
@@ -455,13 +467,15 @@ impl Model {
         let empty_log = DebugLog::new();
         let sender = self.sender.clone();
         let state_copy = self.clone();
-        self.execute_inner(contract_addr, &Addr::unchecked(sender), msg, funds)
-            .map_err(|e| {
-                // revert entire state
-                let _ = mem::replace(self, state_copy);
-                e
-            })?;
-        self.states.write().unwrap().update_block();
+        if self
+            .execute_inner(contract_addr, &Addr::unchecked(sender), msg, funds)
+            .map_err(|e| e)?
+            .is_err()
+        {
+            mem::drop(mem::replace(self, state_copy));
+        } else {
+            self.states.write().unwrap().update_block();
+        }
         Ok(mem::replace(&mut self.debug_log.lock().unwrap(), empty_log))
     }
 
@@ -655,7 +669,7 @@ impl Model {
 #[cfg(test)]
 mod test {
 
-    use cosmwasm_std::{to_binary, Addr, BalanceResponse, BankQuery, Coin, Uint128};
+    use cosmwasm_std::{from_binary, to_binary, Addr, BalanceResponse, BankQuery, Coin, Uint128};
     use serde_json::json;
     use std::str::FromStr;
 
@@ -797,5 +811,41 @@ mod test {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_atomicity() {
+        use test_contract::msg::{ExecuteMsg, QueryMsg, ReadNumberResponse};
+        // test if querier can view writes to the current contract
+        let wasm_code = include_bytes!(concat!(
+            env!("OUT_DIR"),
+            "/wasm32-unknown-unknown/release/test_contract.wasm"
+        ));
+        let mut model = Model::new(MALAGA_RPC_URL, Some(MALAGA_BLOCK_NUMBER), "wasm").unwrap();
+        let pair_address = Addr::unchecked(PAIR_ADDRESS_MALAGA);
+        model.cheat_code(&pair_address, wasm_code).unwrap();
+
+        // set NUMBER to 2
+        let msg = to_binary(&ExecuteMsg::TestQuerySelf {}).unwrap();
+        let _ = model
+            .execute(&pair_address, msg.as_slice(), &vec![])
+            .unwrap();
+
+        // query value of NUMBER
+        let msg = to_binary(&QueryMsg::ReadNumber {}).unwrap();
+        let query_res1: ReadNumberResponse =
+            from_binary(&model.wasm_query(&pair_address, msg.as_slice()).unwrap()).unwrap();
+
+        // run failing execute()
+        let msg = to_binary(&ExecuteMsg::TestAtomic {}).unwrap();
+        let _ = model
+            .execute(&pair_address, msg.as_slice(), &vec![])
+            .unwrap();
+
+        // query value of NUMBER again, it should be same as previous value
+        let msg = to_binary(&QueryMsg::ReadNumber {}).unwrap();
+        let query_res2: ReadNumberResponse =
+            from_binary(&model.wasm_query(&pair_address, msg.as_slice()).unwrap()).unwrap();
+        assert_eq!(query_res1.value, query_res2.value);
     }
 }
