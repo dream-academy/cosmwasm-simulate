@@ -362,12 +362,14 @@ impl Model {
             .instantiate_inner(code_id, &Addr::unchecked(sender), msg, funds)
             .map_err(|e| e)?;
         if res.is_err() {
-            mem::drop(mem::replace(self, state_copy));
+            let orig_state = mem::replace(self, state_copy);
+            let debug_log: DebugLog =
+                mem::replace(&mut orig_state.debug_log.lock().unwrap(), empty_log);
+            Ok(debug_log)
         } else {
             self.states.write().unwrap().update_block();
+            Ok(mem::replace(&mut self.debug_log.lock().unwrap(), empty_log))
         }
-        self.states.write().unwrap().update_block();
-        Ok(mem::replace(&mut self.debug_log.lock().unwrap(), empty_log))
     }
 
     fn instantiate_inner(
@@ -472,11 +474,14 @@ impl Model {
             .map_err(|e| e)?
             .is_err()
         {
-            mem::drop(mem::replace(self, state_copy));
+            let orig_state = mem::replace(self, state_copy);
+            let debug_log: DebugLog =
+                mem::replace(&mut orig_state.debug_log.lock().unwrap(), empty_log);
+            Ok(debug_log)
         } else {
             self.states.write().unwrap().update_block();
+            Ok(mem::replace(&mut self.debug_log.lock().unwrap(), empty_log))
         }
-        Ok(mem::replace(&mut self.debug_log.lock().unwrap(), empty_log))
     }
 
     fn execute_inner(
