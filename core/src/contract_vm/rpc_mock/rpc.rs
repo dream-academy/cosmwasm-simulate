@@ -5,6 +5,7 @@ use ron;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::cmp::Eq;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::convert::TryInto;
@@ -325,7 +326,7 @@ impl CwRpcClient {
     pub fn query_wasm_contract_all(
         &mut self,
         address: &str,
-    ) -> Result<HashMap<Vec<u8>, Vec<u8>>, Error> {
+    ) -> Result<BTreeMap<Vec<u8>, Vec<u8>>, Error> {
         use crate::contract_vm::rpc_items::cosmwasm::wasm::v1::QueryAllContractStateRequest;
         use crate::contract_vm::rpc_items::cosmwasm::wasm::v1::QueryAllContractStateResponse;
         let request = QueryAllContractStateRequest {
@@ -341,7 +342,7 @@ impl CwRpcClient {
                 return Err(Error::serialization_error(e));
             }
         };
-        let mut out = HashMap::new();
+        let mut out = BTreeMap::new();
         for model in resp.models {
             out.insert(model.key, model.value);
         }

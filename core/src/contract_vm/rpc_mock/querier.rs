@@ -5,9 +5,7 @@ use cosmwasm_std::{
     from_binary, from_slice, to_binary, Addr, Binary, ContractInfo, ContractResult, Env,
     QueryRequest, SystemResult, WasmQuery,
 };
-use cosmwasm_vm::{
-    Backend, BackendError, BackendResult, GasInfo, InstanceOptions, Querier, Storage,
-};
+use cosmwasm_vm::{Backend, BackendError, BackendResult, GasInfo, InstanceOptions, Querier};
 use serde::{Deserialize, Serialize};
 
 use std::sync::{Arc, Mutex, RwLock};
@@ -58,12 +56,13 @@ impl RpcMockQuerier {
         )?;
         let contract_state = ContractState {
             code: wasm_code,
-            storage: self
-                .states
-                .write()
-                .unwrap()
-                .client
-                .query_wasm_contract_all(contract_addr.as_str())?,
+            storage: Arc::new(RwLock::new(
+                self.states
+                    .write()
+                    .unwrap()
+                    .client
+                    .query_wasm_contract_all(contract_addr.as_str())?,
+            )),
         };
         self.states
             .write()
@@ -93,13 +92,7 @@ impl RpcMockQuerier {
     }
 
     fn mock_storage(&self, contract_state: &ContractState) -> Result<RpcMockStorage, Error> {
-        let mut storage = RpcMockStorage::new();
-        for (k, v) in contract_state.storage.iter() {
-            storage
-                .set(k.as_slice(), v.as_slice())
-                .0
-                .map_err(|x| Error::vm_error(x))?;
-        }
+        let storage = RpcMockStorage::new(&contract_state.storage);
         Ok(storage)
     }
 }

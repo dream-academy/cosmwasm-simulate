@@ -192,21 +192,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec8a7b6a70fde80372154c65702f00a0f56f3e1c36abbc6c440484be248856db"
 
 [[package]]
-name = "callee"
-version = "0.1.0"
-dependencies = [
- "cosmwasm-schema",
- "cosmwasm-std",
- "cosmwasm-storage",
- "cw-multi-test",
- "cw-storage-plus",
- "cw2",
- "schemars",
- "serde",
- "thiserror",
-]
-
-[[package]]
 name = "cc"
 version = "1.0.74"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -327,7 +312,6 @@ dependencies = [
  "bech32",
  "cosmwasm-std",
  "cosmwasm-vm",
- "dashmap",
  "hex",
  "lazy_static",
  "prost 0.11.0",
@@ -339,6 +323,7 @@ dependencies = [
  "sha2 0.10.6",
  "tendermint",
  "tendermint-rpc",
+ "test-contract",
  "time 0.3.16",
  "tokio",
  "wasmer",
@@ -675,19 +660,6 @@ dependencies = [
  "darling_core",
  "quote",
  "syn",
-]
-
-[[package]]
-name = "dashmap"
-version = "5.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "907076dfda823b0b36d2a1bb5f90c96660a5bbcd7729e10727f07858f22c4edc"
-dependencies = [
- "cfg-if 1.0.0",
- "hashbrown 0.12.3",
- "lock_api 0.4.9",
- "once_cell",
- "parking_lot_core 0.9.4",
 ]
 
 [[package]]
@@ -2982,6 +2954,21 @@ dependencies = [
  "url 2.3.1",
  "uuid",
  "walkdir",
+]
+
+[[package]]
+name = "test-contract"
+version = "0.1.0"
+dependencies = [
+ "cosmwasm-schema",
+ "cosmwasm-std",
+ "cosmwasm-storage",
+ "cw-multi-test",
+ "cw-storage-plus",
+ "cw2",
+ "schemars",
+ "serde",
+ "thiserror",
 ]
 
 [[package]]

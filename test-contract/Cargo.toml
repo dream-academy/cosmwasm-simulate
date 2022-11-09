@@ -1,5 +1,5 @@
 [package]
-name = "cw-semantics-test"
+name = "test-contract"
 version = "0.1.0"
 authors = ["procfs <wireless@kaist.ac.kr>"]
 edition = "2021"

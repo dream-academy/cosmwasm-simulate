@@ -1,15 +1,17 @@
+use crate::rpc_mock::ContractStorage;
 use cosmwasm_std::{Order, Record};
 use cosmwasm_vm::{BackendError, BackendResult, GasInfo, Storage};
 
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::fmt;
+use std::sync::{Arc, RwLock};
 
 ///mock storage
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub struct RpcMockStorage {
-    data: BTreeMap<Vec<u8>, Vec<u8>>,
+    inner: Arc<RwLock<ContractStorage>>,
     #[cfg(feature = "iterator")]
-    iterators: BTreeMap<u32, (Vec<Record>, usize)>,
+    iterators: HashMap<u32, (Vec<Record>, usize)>,
     #[cfg(feature = "iterator")]
     iterator_id_ctr: u32,
 }
@@ -22,8 +24,12 @@ impl fmt::Debug for RpcMockStorage {
 }
 
 impl RpcMockStorage {
-    pub fn new() -> Self {
-        RpcMockStorage::default()
+    pub fn new(inner: &Arc<RwLock<ContractStorage>>) -> Self {
+        Self {
+            inner: Arc::clone(inner),
+            iterators: HashMap::new(),
+            iterator_id_ctr: 0,
+        }
     }
 
     #[cfg(feature = "iterator")]
@@ -37,7 +43,10 @@ impl RpcMockStorage {
 
 impl Storage for RpcMockStorage {
     fn get(&self, key: &[u8]) -> BackendResult<Option<Vec<u8>>> {
-        (Ok(self.data.get(key).cloned()), GasInfo::free())
+        (
+            Ok(self.inner.read().unwrap().get(key).cloned()),
+            GasInfo::free(),
+        )
     }
 
     #[cfg(feature = "iterator")]
@@ -50,19 +59,23 @@ impl Storage for RpcMockStorage {
         // BTreeMap.range panics if range is start > end.
         // However, this cases represent just empty range and we treat it as such.
 
+        let inner = self.inner.read().unwrap();
         let range = match (start, end) {
             (Some(s), Some(e)) => {
                 if start > end {
+                    drop(inner);
                     return (Ok(self.new_iterator(vec![])), GasInfo::free());
                 } else {
-                    self.data.range(s.to_vec()..e.to_vec())
+                    inner.range(s.to_vec()..e.to_vec())
                 }
             }
-            (Some(s), None) => self.data.range(s.to_vec()..),
-            (None, Some(e)) => self.data.range(..e.to_vec()),
-            (None, None) => self.data.range(vec![]..),
+            (Some(s), None) => inner.range(s.to_vec()..),
+            (None, Some(e)) => inner.range(..e.to_vec()),
+            (None, None) => inner.range(vec![]..),
         };
         let mut records: Vec<Record> = range.map(|(x, y)| (x.clone(), y.clone())).collect();
+        drop(inner);
+
         match order {
             Order::Ascending => (Ok(self.new_iterator(records)), GasInfo::free()),
             Order::Descending => {
@@ -90,12 +103,15 @@ impl Storage for RpcMockStorage {
     }
 
     fn set(&mut self, key: &[u8], value: &[u8]) -> BackendResult<()> {
-        self.data.insert(key.to_vec(), value.to_vec());
+        self.inner
+            .write()
+            .unwrap()
+            .insert(key.to_vec(), value.to_vec());
         (Ok(()), GasInfo::free())
     }
 
     fn remove(&mut self, key: &[u8]) -> BackendResult<()> {
-        self.data.remove(key);
+        self.inner.write().unwrap().remove(key);
         (Ok(()), GasInfo::free())
     }
 }

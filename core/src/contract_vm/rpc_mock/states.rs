@@ -5,9 +5,10 @@ use cosmwasm_std::{
     ContractResult, Event, Response, Timestamp, Uint128,
 };
 use std::collections::hash_map::Entry;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::{Arc, RwLock};
 
-pub type ContractStorage = HashMap<Vec<u8>, Vec<u8>>;
+pub type ContractStorage = BTreeMap<Vec<u8>, Vec<u8>>;
 
 const BLOCK_EPOCH: u64 = 1_000_000_000;
 
@@ -15,7 +16,7 @@ const BLOCK_EPOCH: u64 = 1_000_000_000;
 #[derive(Clone)]
 pub struct ContractState {
     pub code: Vec<u8>,
-    pub storage: ContractStorage,
+    pub storage: Arc<RwLock<ContractStorage>>,
 }
 
 #[derive(Clone)]
@@ -61,7 +62,13 @@ impl AllStates {
     }
 
     pub fn contract_storage_update(&mut self, contract_addr: &Addr, new_storage: ContractStorage) {
-        self.contract_states.get_mut(contract_addr).unwrap().storage = new_storage;
+        *self
+            .contract_states
+            .get_mut(contract_addr)
+            .unwrap()
+            .storage
+            .write()
+            .unwrap() = new_storage;
     }
 
     pub fn contract_state_get(&self, contract_addr: &Addr) -> Option<&ContractState> {

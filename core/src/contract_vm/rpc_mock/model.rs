@@ -9,10 +9,10 @@ use crate::rpc_mock::{ContractState, ContractStorage};
 
 use cosmwasm_std::{
     from_binary, Addr, BankMsg, BankQuery, Binary, Coin, ContractInfo, ContractResult, CosmosMsg,
-    Env, Event, Order, Reply, ReplyOn, Response, SubMsgResponse, SubMsgResult, Timestamp, Uint128,
+    Env, Event, Reply, ReplyOn, Response, SubMsgResponse, SubMsgResult, Timestamp, Uint128,
     WasmMsg, WasmQuery,
 };
-use cosmwasm_vm::{Backend, InstanceOptions, Storage};
+use cosmwasm_vm::{Backend, InstanceOptions};
 use prost::Message;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -90,12 +90,13 @@ impl Model {
         )?;
         let contract_state = ContractState {
             code: wasm_code,
-            storage: self
-                .states
-                .write()
-                .unwrap()
-                .client
-                .query_wasm_contract_all(contract_addr.as_str())?,
+            storage: Arc::new(RwLock::new(
+                self.states
+                    .write()
+                    .unwrap()
+                    .client
+                    .query_wasm_contract_all(contract_addr.as_str())?,
+            )),
         };
         self.states
             .write()
@@ -200,7 +201,6 @@ impl Model {
             let mut instance = self.create_instance(origin)?;
             let env = self.env(origin)?;
             let maybe_response = instance.reply(&env, &reply)?;
-            self.handle_instance(origin, instance)?;
 
             if maybe_response.is_err() {
                 // propagate error. instance.reply need not error handling
@@ -255,7 +255,6 @@ impl Model {
 
             let mut instance = self.create_instance(origin)?;
             let maybe_response = instance.reply(&env, &reply)?;
-            self.handle_instance(origin, instance)?;
 
             if maybe_response.is_err() {
                 // propagate error. instance.reply need not error handling
@@ -339,33 +338,6 @@ impl Model {
         }
         Ok(last_response)
     }
-
-    /// consumes an instance and updates self.states
-    fn handle_instance(
-        &mut self,
-        contract_addr: &Addr,
-        instance: RpcContractInstance,
-    ) -> Result<(), Error> {
-        let mut backend = instance.recycle();
-        let (maybe_iter, _) = backend.storage.scan(None, None, Order::Ascending);
-        let iter = maybe_iter.map_err(|e| Error::backend_error(e))?;
-        let mut storage = HashMap::new();
-        loop {
-            let (maybe_entry, _) = backend.storage.next(iter);
-            let entry = maybe_entry.map_err(|e| Error::backend_error(e))?;
-            if let Some(entry) = entry {
-                storage.insert(entry.0, entry.1);
-            } else {
-                break;
-            }
-        }
-        self.states
-            .write()
-            .unwrap()
-            .contract_storage_update(contract_addr, storage);
-        Ok(())
-    }
-
     pub fn instantiate(
         &mut self,
         code_id: u64,
@@ -418,7 +390,8 @@ impl Model {
         };
 
         // because contract address does not exist on chain, create mock storage from empty set
-        let deps = self.new_mock(&ContractStorage::new())?;
+        let emtpy_storage = Arc::new(RwLock::new(ContractStorage::new()));
+        let deps = self.new_mock(&emtpy_storage)?;
         let options = InstanceOptions {
             gas_limit: u64::MAX,
             print_debug: false,
@@ -440,7 +413,7 @@ impl Model {
         // create a temporary contract_state, which will be deleted if instantiation fails
         let contract_state = ContractState {
             code: wasm_code,
-            storage: ContractStorage::new(),
+            storage: Arc::new(RwLock::new(ContractStorage::new())),
         };
         self.states
             .write()
@@ -468,7 +441,6 @@ impl Model {
                 return Ok((ContractResult::Err(e), None));
             }
         };
-        self.handle_instance(&contract_addr, instance)?;
         let response = self.handle_response(&contract_addr, &response)?;
 
         Ok((response, Some(contract_addr)))
@@ -535,7 +507,6 @@ impl Model {
                 return Ok(ContractResult::Err(e));
             }
         };
-        self.handle_instance(contract_addr, instance)?;
         self.handle_response(contract_addr, &response)
     }
 
@@ -559,7 +530,10 @@ impl Model {
         self.states.write().unwrap().bank_query(&bank_query)
     }
 
-    fn new_mock(&self, contract_storage: &ContractStorage) -> Result<RpcBackend, Error> {
+    fn new_mock(
+        &self,
+        contract_storage: &Arc<RwLock<ContractStorage>>,
+    ) -> Result<RpcBackend, Error> {
         let states = self.states.read().unwrap();
         let canonical_address_length = states.canonical_address_length;
         let bech32_prefix = states.bech32_prefix.to_string();
@@ -591,14 +565,11 @@ impl Model {
         })
     }
 
-    fn mock_storage(&self, contract_storage: &ContractStorage) -> Result<RpcMockStorage, Error> {
-        let mut storage = RpcMockStorage::new();
-        for (k, v) in contract_storage {
-            storage
-                .set(k.as_slice(), v.as_slice())
-                .0
-                .map_err(|x| Error::vm_error(x))?;
-        }
+    fn mock_storage(
+        &self,
+        contract_storage: &Arc<RwLock<ContractStorage>>,
+    ) -> Result<RpcMockStorage, Error> {
+        let storage = RpcMockStorage::new(contract_storage);
         Ok(storage)
     }
 
@@ -674,6 +645,8 @@ impl Model {
         let contract_storage = states.contract_state_get_mut(contract_addr).unwrap();
         contract_storage
             .storage
+            .write()
+            .unwrap()
             .insert(key.to_vec(), value.to_vec());
         Ok(())
     }
@@ -800,5 +773,29 @@ mod test {
             prev_block_num + 1
         );
         assert_eq!(log.err_msg, None);
+    }
+
+    #[test]
+    fn test_storage_write() {
+        use test_contract::msg::ExecuteMsg;
+        // test if querier can view writes to the current contract
+        let wasm_code = include_bytes!(concat!(
+            env!("OUT_DIR"),
+            "/wasm32-unknown-unknown/release/test_contract.wasm"
+        ));
+        let mut model = Model::new(MALAGA_RPC_URL, Some(MALAGA_BLOCK_NUMBER), "wasm").unwrap();
+        let pair_address = Addr::unchecked(PAIR_ADDRESS_MALAGA);
+        model.cheat_code(&pair_address, wasm_code).unwrap();
+        let msg = to_binary(&ExecuteMsg::TestQuerySelf {}).unwrap();
+        let res = model
+            .execute(&pair_address, msg.as_slice(), &vec![])
+            .unwrap();
+        for log in res.logs {
+            for event in log.events {
+                if event.ty == "read_number" {
+                    assert_eq!(event.attributes[0].value.as_str(), "2");
+                }
+            }
+        }
     }
 }
