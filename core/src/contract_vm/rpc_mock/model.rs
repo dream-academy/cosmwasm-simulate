@@ -853,4 +853,30 @@ mod test {
             from_binary(&model.wasm_query(&pair_address, msg.as_slice()).unwrap()).unwrap();
         assert_eq!(query_res1.value, query_res2.value);
     }
+
+    #[test]
+    fn test_query() {
+        let mut model = Model::new(MALAGA_RPC_URL, Some(MALAGA_BLOCK_NUMBER), "wasm").unwrap();
+        let normal_query = to_binary(&BankQuery::Balance {
+            address: PAIR_ADDRESS_MALAGA.to_string(),
+            denom: "umlg".to_string(),
+        })
+        .unwrap();
+        let query_result1 =
+            String::from_utf8(model.bank_query(normal_query.as_slice()).unwrap().to_vec()).unwrap();
+        let abnormal_query = to_binary(&BankQuery::Balance {
+            address: PAIR_ADDRESS_MALAGA.to_string(),
+            denom: "umLg".to_string(),
+        })
+        .unwrap();
+        let query_result2 = String::from_utf8(
+            model
+                .bank_query(abnormal_query.as_slice())
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        println!("{}", query_result1);
+        println!("{}", query_result2);
+    }
 }
