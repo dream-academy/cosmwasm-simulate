@@ -22,7 +22,7 @@ pub fn instantiate(
     _info: MessageInfo,
     _msg: InstantiateMsg,
 ) -> Result<Response, ContractError> {
-    let _ = NUMBER.save(deps.storage, &1);
+    NUMBER.save(deps.storage, &1)?;
     Ok(Response::new())
 }
 
@@ -36,24 +36,23 @@ pub fn execute(
     match msg {
         ExecuteMsg::TestQuerySelf {} => execute_write_and_query_self(deps, env),
         ExecuteMsg::TestAtomic {} => execute_write_and_panic(deps),
-        _ => panic!("unreachable"),
     }
 }
 
 fn execute_write_and_query_self(deps: DepsMut, env: Env) -> Result<Response, ContractError> {
-    let _ = NUMBER.save(deps.storage, &2);
+    NUMBER.save(deps.storage, &2)?;
     let msg = QueryMsg::ReadNumber {};
     let res: ReadNumberResponse = deps
         .querier
         .query_wasm_smart(env.contract.address, &msg)
         .unwrap();
-    let _ = NUMBER.save(deps.storage, &1);
+    NUMBER.save(deps.storage, &1)?;
     Ok(Response::new()
         .add_event(Event::new("read_number").add_attribute("value", format!("{}", res.value))))
 }
 
 fn execute_write_and_panic(deps: DepsMut) -> Result<Response, ContractError> {
-    let _ = NUMBER.save(deps.storage, &100);
+    NUMBER.save(deps.storage, &100)?;
     Err(ContractError::Unauthorized {})
 }
 
