@@ -29,6 +29,8 @@ pub struct Model {
     code_id_counters: HashMap<u64, u64>,
     // for debugging
     debug_log: Arc<Mutex<DebugLog>>,
+    // for userprovided code
+    custom_codes: HashMap<u64, Vec<u8>>,
 }
 
 const WASM_MAGIC: [u8; 4] = [0, 97, 115, 109];
@@ -54,6 +56,7 @@ impl Clone for Model {
             sender: self.sender.clone(),
             code_id_counters: self.code_id_counters.clone(),
             debug_log: Arc::new(Mutex::new(self.debug_log.lock().unwrap().clone())),
+            custom_codes: self.custom_codes.clone(),
         }
     }
 }
@@ -71,6 +74,7 @@ impl Model {
             sender: BASE_EOA.to_string(),
             code_id_counters: HashMap::new(),
             debug_log: Arc::new(Mutex::new(DebugLog::new())),
+            custom_codes: HashMap::new(),
         })
     }
 
@@ -348,6 +352,12 @@ impl Model {
         }
         Ok(last_response)
     }
+
+    pub fn add_custom_code(&mut self, code_id: u64, code: &[u8]) -> Result<(), Error> {
+        self.custom_codes.insert(code_id, code.to_vec());
+        Ok(())
+    }
+
     pub fn instantiate(
         &mut self,
         code_id: u64,
@@ -410,13 +420,17 @@ impl Model {
             gas_limit: u64::MAX,
             print_debug: false,
         };
-        let wasm_code = maybe_unzip(
-            self.states
-                .write()
-                .unwrap()
-                .client
-                .query_wasm_contract_code(code_id)?,
-        )?;
+        let wasm_code = if let Some(code) = self.custom_codes.get(&code_id) {
+            code.clone()
+        } else {
+            maybe_unzip(
+                self.states
+                    .write()
+                    .unwrap()
+                    .client
+                    .query_wasm_contract_code(code_id)?,
+            )?
+        };
         let wasm_instance =
             match cosmwasm_vm::Instance::from_code(wasm_code.as_slice(), deps, options, None) {
                 Err(e) => {
@@ -427,7 +441,7 @@ impl Model {
         // create a temporary contract_state, which will be deleted if instantiation fails
         let contract_state = ContractState {
             code: wasm_code,
-            storage: Arc::new(RwLock::new(ContractStorage::new())),
+            storage: emtpy_storage,
         };
         self.states
             .write()
@@ -456,7 +470,6 @@ impl Model {
             }
         };
         let response = self.handle_response(&contract_addr, &response)?;
-
         Ok((response, Some(contract_addr)))
     }
 
@@ -678,7 +691,7 @@ mod test {
     use serde_json::json;
     use std::str::FromStr;
 
-    use crate::contract_vm::rpc_mock::model::Model;
+    use crate::{contract_vm::rpc_mock::model::Model, rpc_mock::debug_log::DebugLogEntry};
 
     const MALAGA_RPC_URL: &'static str = "https://rpc.malaga-420.cosmwasm.com:443";
     const MALAGA_BLOCK_NUMBER: u64 = 2326474;
@@ -866,7 +879,7 @@ mod test {
             String::from_utf8(model.bank_query(normal_query.as_slice()).unwrap().to_vec()).unwrap();
         let abnormal_query = to_binary(&BankQuery::Balance {
             address: PAIR_ADDRESS_MALAGA.to_string(),
-            denom: "umLg".to_string(),
+            denom: "umlg".to_string(),
         })
         .unwrap();
         let query_result2 = String::from_utf8(
@@ -878,5 +891,38 @@ mod test {
         .unwrap();
         println!("{}", query_result1);
         println!("{}", query_result2);
+    }
+
+    fn get_contract_address_from_log(logs: &[DebugLogEntry]) -> Option<String> {
+        for log in logs.iter() {
+            for event in log.events.iter() {
+                for attribute in event.attributes.iter() {
+                    if attribute.key.as_str() == "_contract_address" {
+                        return Some(attribute.value.clone());
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn test_add_custom_code() {
+        use test_contract::msg::{InstantiateMsg, QueryMsg, ReadNumberResponse};
+        let mut model = Model::new(MALAGA_RPC_URL, Some(MALAGA_BLOCK_NUMBER), "wasm").unwrap();
+        let code = include_bytes!(concat!(
+            env!("OUT_DIR"),
+            "/wasm32-unknown-unknown/release/test_contract.wasm"
+        ));
+        model.add_custom_code(1337, code).unwrap();
+        let msg = to_binary(&InstantiateMsg {}).unwrap();
+        let funds = vec![];
+        let debug_log = model.instantiate(1337, msg.as_slice(), &funds).unwrap();
+        let contract_address =
+            Addr::unchecked(get_contract_address_from_log(&debug_log.logs).unwrap());
+        let msg = to_binary(&QueryMsg::ReadNumber {}).unwrap();
+        let query_res: ReadNumberResponse =
+            from_binary(&model.wasm_query(&contract_address, msg.as_slice()).unwrap()).unwrap();
+        assert_eq!(query_res.value, 1);
     }
 }

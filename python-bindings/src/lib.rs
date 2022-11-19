@@ -47,6 +47,14 @@ impl Model {
         Ok(Model { inner: model })
     }
 
+    pub fn add_custom_code(mut self_: PyRefMut<Self>, code_id: u64, code: &[u8]) -> PyResult<()> {
+        let model = &mut self_.inner;
+        model
+            .add_custom_code(code_id, code)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        Ok(())
+    }
+
     pub fn instantiate(
         mut self_: PyRefMut<Self>,
         code_id: u64,
