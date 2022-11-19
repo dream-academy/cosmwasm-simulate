@@ -36,7 +36,6 @@ pub fn execute(
     match msg {
         ExecuteMsg::TestQuerySelf {} => execute_write_and_query_self(deps, env),
         ExecuteMsg::TestAtomic {} => execute_write_and_panic(deps),
-        _ => panic!("unreachable"),
     }
 }
 
