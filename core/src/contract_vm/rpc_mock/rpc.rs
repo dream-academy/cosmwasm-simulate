@@ -108,7 +108,7 @@ impl RpcCache {
                 .read_to_string(&mut file_contents)
                 .map_err(|e| Error::io_error(e))?;
             let db: HashMap<RpcCacheK, RpcCacheV> =
-                ron::from_str(&file_contents).map_err(|e| Error::serialization_error(e))?;
+                ron::from_str(&file_contents).map_err(|e| Error::format_error(e))?;
             (file, db)
         } else {
             let file = rwopen(cachefile_path).map_err(|e| Error::io_error(e))?;
@@ -152,7 +152,7 @@ impl RpcCache {
         match self {
             Self::Empty => Ok(()),
             Self::FileBacked { db, file, .. } => {
-                let serialized = ron::to_string(db).map_err(|e| Error::serialization_error(e))?;
+                let serialized = ron::to_string(db).map_err(|e| Error::format_error(e))?;
                 file.seek(SeekFrom::Start(0))
                     .map_err(|e| Error::io_error(e))?;
                 file.write(serialized.as_bytes())
@@ -168,7 +168,7 @@ fn serialize<M: Message>(m: &M) -> Result<Vec<u8>, Error> {
     let mut out = Vec::new();
     match m.encode(&mut out) {
         Ok(_) => Ok(out),
-        Err(e) => Err(Error::serialization_error(e)),
+        Err(e) => Err(Error::format_error(e)),
     }
 }
 
@@ -289,7 +289,7 @@ impl CwRpcClient {
         let resp = match QueryAllBalancesResponse::decode(out.as_slice()) {
             Ok(r) => r,
             Err(e) => {
-                return Err(Error::serialization_error(e));
+                return Err(Error::format_error(e));
             }
         };
         let balances: Vec<(String, u128)> = resp
@@ -317,7 +317,7 @@ impl CwRpcClient {
         let resp = match QuerySmartContractStateResponse::decode(out.as_slice()) {
             Ok(r) => r,
             Err(e) => {
-                return Err(Error::serialization_error(e));
+                return Err(Error::format_error(e));
             }
         };
         Ok(resp.data)
@@ -339,7 +339,7 @@ impl CwRpcClient {
         let resp = match QueryAllContractStateResponse::decode(out.as_slice()) {
             Ok(r) => r,
             Err(e) => {
-                return Err(Error::serialization_error(e));
+                return Err(Error::format_error(e));
             }
         };
         let mut out = BTreeMap::new();
@@ -364,7 +364,7 @@ impl CwRpcClient {
         let resp = match QueryContractInfoResponse::decode(out.as_slice()) {
             Ok(r) => r,
             Err(e) => {
-                return Err(Error::serialization_error(e));
+                return Err(Error::format_error(e));
             }
         };
         if let Some(ci) = resp.contract_info {
@@ -387,7 +387,7 @@ impl CwRpcClient {
         let resp = match QueryCodeResponse::decode(out.as_slice()) {
             Ok(r) => r,
             Err(e) => {
-                return Err(Error::serialization_error(e));
+                return Err(Error::format_error(e));
             }
         };
         Ok(resp.data)

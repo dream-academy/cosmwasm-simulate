@@ -4,9 +4,10 @@ use std::fmt;
 pub enum Error {
     TokioError(String),
     RpcError(String),
+    HttpError(String),
     InvalidArg(String),
     TendermintError(String),
-    SerializationError(String),
+    FormatError(String),
     VmError(String),
     StdError(String),
     IoError(String),
@@ -23,6 +24,10 @@ impl Error {
         Self::RpcError(msg.to_string())
     }
 
+    pub fn http_error<T: ToString>(msg: T) -> Self {
+        Self::HttpError(msg.to_string())
+    }
+
     pub fn invalid_argument<T: ToString>(msg: T) -> Self {
         Self::InvalidArg(msg.to_string())
     }
@@ -31,8 +36,8 @@ impl Error {
         Self::TendermintError(msg.to_string())
     }
 
-    pub fn serialization_error<T: ToString>(msg: T) -> Self {
-        Self::SerializationError(msg.to_string())
+    pub fn format_error<T: ToString>(msg: T) -> Self {
+        Self::FormatError(msg.to_string())
     }
 
     pub fn vm_error<T: ToString>(msg: T) -> Self {
@@ -65,14 +70,17 @@ impl fmt::Display for Error {
             Self::RpcError(s) => {
                 writeln!(f, "RPC error: {}", s)?;
             }
+            Self::HttpError(s) => {
+                writeln!(f, "HTTP error: {}", s)?;
+            }
             Self::InvalidArg(s) => {
                 writeln!(f, "Invalid argument: {}", s)?;
             }
             Self::TendermintError(s) => {
                 writeln!(f, "tendermint error: {}", s)?;
             }
-            Self::SerializationError(s) => {
-                writeln!(f, "serialization error: {}", s)?;
+            Self::FormatError(s) => {
+                writeln!(f, "format error: {}", s)?;
             }
             Self::VmError(s) => {
                 writeln!(f, "vm error: {}", s)?;

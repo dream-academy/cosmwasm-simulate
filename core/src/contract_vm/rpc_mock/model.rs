@@ -132,7 +132,7 @@ impl Model {
             &self.states.read().unwrap().bech32_prefix,
             self.states.read().unwrap().canonical_address_length,
         )
-        .map_err(|e| Error::serialization_error(&e))?;
+        .map_err(|e| Error::format_error(&e))?;
         Ok(Addr::unchecked(addr))
     }
 
@@ -558,7 +558,7 @@ impl Model {
 
     pub fn bank_query(&mut self, bank_query_: &[u8]) -> Result<Binary, Error> {
         let bank_query: BankQuery =
-            from_binary(&Binary::from(bank_query_)).map_err(|e| Error::serialization_error(e))?;
+            from_binary(&Binary::from(bank_query_)).map_err(|e| Error::format_error(e))?;
         self.states.write().unwrap().bank_query(&bank_query)
     }
 

@@ -1,7 +1,9 @@
 mod api;
+mod client_backend;
 mod debug_log;
 mod instance;
 mod items;
+mod lcd;
 mod model;
 mod querier;
 mod rpc;
@@ -9,6 +11,7 @@ mod states;
 mod storage;
 
 pub use api::RpcMockApi;
+pub use client_backend::ClientBackend;
 pub use debug_log::DebugLog;
 pub use instance::RpcContractInstance;
 pub use items::rpc_items;

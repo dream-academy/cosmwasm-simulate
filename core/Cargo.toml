@@ -31,6 +31,9 @@ hex = "0.4.3"
 time = "0.3.16"
 bech32 = "0.9.1"
 sha2 = "0.10.6"
+oxhttp = { version = "0.1.5", features = ["rustls"] }
+chrono = "0.4.23"
+base64 = "0.13.1"
 test-contract = { path = "../test-contract" }
 
 [build-dependencies]
