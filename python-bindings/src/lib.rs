@@ -41,8 +41,13 @@ impl DebugLog {
 #[pymethods]
 impl Model {
     #[new]
-    fn new(rpc_url: String, block_number: Option<u64>, bech32_prefix: String) -> PyResult<Model> {
-        let model = cosmwasm_simulate::Model::new(&rpc_url, block_number, &bech32_prefix)
+    fn new(
+        protocol: String,
+        url: String,
+        block_number: Option<u64>,
+        bech32_prefix: String,
+    ) -> PyResult<Model> {
+        let model = cosmwasm_simulate::Model::new(&protocol, &url, block_number, &bech32_prefix)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         Ok(Model { inner: model })
     }

@@ -4,8 +4,8 @@ use crate::contract_vm::rpc_mock::{
     RpcMockStorage,
 };
 use crate::contract_vm::Error;
-use crate::rpc_items;
 use crate::rpc_mock::{ContractState, ContractStorage};
+use crate::{rpc_items, CwClientBackend};
 
 use cosmwasm_std::{
     from_binary, Addr, BankMsg, BankQuery, Binary, Coin, ContractInfo, ContractResult, CosmosMsg,
@@ -18,6 +18,8 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::mem;
 use std::sync::{Arc, Mutex, RwLock};
+
+use super::lcd::CwLcdClient;
 
 pub type RpcBackend = Backend<RpcMockApi, RpcMockStorage, RpcMockQuerier>;
 
@@ -63,11 +65,21 @@ impl Clone for Model {
 
 impl Model {
     pub fn new(
-        rpc_url: &str,
+        protocol: &str,
+        url: &str,
         block_number: Option<u64>,
         bech32_prefix: &str,
     ) -> Result<Self, Error> {
-        let client = CwRpcClient::new(rpc_url, block_number)?;
+        let client: Box<dyn CwClientBackend> = match protocol {
+            "LCD" | "lcd" => Box::new(CwLcdClient::new(url, block_number)?),
+            "RPC" | "rpc" => Box::new(CwRpcClient::new(url, block_number)?),
+            _ => {
+                return Err(Error::invalid_argument(&format!(
+                    "protocol {} is unsupported",
+                    protocol
+                )));
+            }
+        };
 
         Ok(Model {
             states: Arc::new(RwLock::new(AllStates::new(client, 32, bech32_prefix)?)),
@@ -109,7 +121,7 @@ impl Model {
                     .write()
                     .unwrap()
                     .client
-                    .query_wasm_contract_all(contract_addr.as_str())?,
+                    .query_wasm_contract_state_all(contract_addr.as_str())?,
             )),
         };
         self.states
@@ -706,7 +718,8 @@ mod test {
     #[test]
     fn test_swap_basic_testnet() {
         use serde_json::Value::Null;
-        let mut model = Model::new(MALAGA_RPC_URL, Some(MALAGA_BLOCK_NUMBER), "wasm").unwrap();
+        let mut model =
+            Model::new("RPC", MALAGA_RPC_URL, Some(MALAGA_BLOCK_NUMBER), "wasm").unwrap();
         let pair_address = Addr::unchecked(PAIR_ADDRESS_MALAGA);
         let token_address = Addr::unchecked(TOKEN_ADDRESS_MALAGA);
         let my_address = model.sender.clone();
@@ -779,7 +792,8 @@ mod test {
 
     #[test]
     fn test_flashloan() {
-        let mut model = Model::new(MALAGA_RPC_URL, Some(MALAGA_BLOCK_NUMBER), "wasm").unwrap();
+        let mut model =
+            Model::new("RPC", MALAGA_RPC_URL, Some(MALAGA_BLOCK_NUMBER), "wasm").unwrap();
         let _vault_address = Addr::unchecked(VAULT_ADDRESS);
         let vault_router_address = Addr::unchecked(VAULT_ROUTER_ADDRESS);
         let _my_address = model.sender.clone();
@@ -815,7 +829,8 @@ mod test {
             env!("OUT_DIR"),
             "/wasm32-unknown-unknown/release/test_contract.wasm"
         ));
-        let mut model = Model::new(MALAGA_RPC_URL, Some(MALAGA_BLOCK_NUMBER), "wasm").unwrap();
+        let mut model =
+            Model::new("RPC", MALAGA_RPC_URL, Some(MALAGA_BLOCK_NUMBER), "wasm").unwrap();
         let pair_address = Addr::unchecked(PAIR_ADDRESS_MALAGA);
         model.cheat_code(&pair_address, wasm_code).unwrap();
         let msg = to_binary(&ExecuteMsg::TestQuerySelf {}).unwrap();
@@ -839,7 +854,8 @@ mod test {
             env!("OUT_DIR"),
             "/wasm32-unknown-unknown/release/test_contract.wasm"
         ));
-        let mut model = Model::new(MALAGA_RPC_URL, Some(MALAGA_BLOCK_NUMBER), "wasm").unwrap();
+        let mut model =
+            Model::new("RPC", MALAGA_RPC_URL, Some(MALAGA_BLOCK_NUMBER), "wasm").unwrap();
         let pair_address = Addr::unchecked(PAIR_ADDRESS_MALAGA);
         model.cheat_code(&pair_address, wasm_code).unwrap();
 
@@ -869,7 +885,8 @@ mod test {
 
     #[test]
     fn test_query() {
-        let mut model = Model::new(MALAGA_RPC_URL, Some(MALAGA_BLOCK_NUMBER), "wasm").unwrap();
+        let mut model =
+            Model::new("RPC", MALAGA_RPC_URL, Some(MALAGA_BLOCK_NUMBER), "wasm").unwrap();
         let normal_query = to_binary(&BankQuery::Balance {
             address: PAIR_ADDRESS_MALAGA.to_string(),
             denom: "umlg".to_string(),
@@ -909,7 +926,8 @@ mod test {
     #[test]
     fn test_add_custom_code() {
         use test_contract::msg::{InstantiateMsg, QueryMsg, ReadNumberResponse};
-        let mut model = Model::new(MALAGA_RPC_URL, Some(MALAGA_BLOCK_NUMBER), "wasm").unwrap();
+        let mut model =
+            Model::new("RPC", MALAGA_RPC_URL, Some(MALAGA_BLOCK_NUMBER), "wasm").unwrap();
         let code = include_bytes!(concat!(
             env!("OUT_DIR"),
             "/wasm32-unknown-unknown/release/test_contract.wasm"

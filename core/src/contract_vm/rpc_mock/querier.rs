@@ -61,7 +61,7 @@ impl RpcMockQuerier {
                     .write()
                     .unwrap()
                     .client
-                    .query_wasm_contract_all(contract_addr.as_str())?,
+                    .query_wasm_contract_state_all(contract_addr.as_str())?,
             )),
         };
         self.states

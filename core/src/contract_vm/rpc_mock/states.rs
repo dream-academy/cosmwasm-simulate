@@ -1,5 +1,5 @@
 use crate::contract_vm::Error;
-use crate::rpc_mock::CwRpcClient;
+use crate::rpc_mock::CwClientBackend;
 use cosmwasm_std::{
     to_binary, Addr, AllBalanceResponse, BalanceResponse, BankMsg, BankQuery, Binary, Coin,
     ContractResult, Event, Response, Timestamp, Uint128,
@@ -31,7 +31,7 @@ impl Clone for ContractState {
 pub struct AllStates {
     contract_states: HashMap<Addr, ContractState>,
     bank_states: HashMap<Addr, HashMap<String, Uint128>>,
-    pub client: CwRpcClient,
+    pub client: Box<dyn CwClientBackend>,
     // fields related to blockchain environment
     pub block_number: u64,
     pub block_timestamp: Timestamp,
@@ -42,10 +42,11 @@ pub struct AllStates {
 
 impl AllStates {
     pub fn new(
-        client: CwRpcClient,
+        client: Box<dyn CwClientBackend>,
         canonical_address_length: usize,
         bech32_prefix: &str,
     ) -> Result<Self, Error> {
+        let mut client = client;
         let block_number = client.block_number();
         let block_timestamp = client.timestamp()?;
         let chain_id = client.chain_id()?;

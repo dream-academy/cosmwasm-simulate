@@ -11,7 +11,7 @@ mod states;
 mod storage;
 
 pub use api::RpcMockApi;
-pub use client_backend::ClientBackend;
+pub use client_backend::CwClientBackend;
 pub use debug_log::DebugLog;
 pub use instance::RpcContractInstance;
 pub use items::rpc_items;

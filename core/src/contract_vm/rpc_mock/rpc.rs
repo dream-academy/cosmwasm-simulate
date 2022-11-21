@@ -23,9 +23,9 @@ use tendermint::Time;
 use tendermint_rpc::{Client, HttpClient};
 use tokio;
 
+use super::client_backend::ContractInfo;
+use crate::CwClientBackend;
 use crate::Error;
-
-use crate::contract_vm::rpc_items::cosmwasm::wasm;
 
 const RPC_CACHE_DIRNAME: &str = ".cw-rpc-cache";
 
@@ -163,87 +163,7 @@ impl RpcCache {
     }
 }
 
-// protobuf serialize
-fn serialize<M: Message>(m: &M) -> Result<Vec<u8>, Error> {
-    let mut out = Vec::new();
-    match m.encode(&mut out) {
-        Ok(_) => Ok(out),
-        Err(e) => Err(Error::format_error(e)),
-    }
-}
-
-fn wait_future<F: Future>(f: F) -> Result<F::Output, Error> {
-    match tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-    {
-        Ok(b) => Ok(b.block_on(f)),
-        Err(e) => Err(Error::tokio_error(e)),
-    }
-}
-
 impl CwRpcClient {
-    pub fn new(url: &str, block_number: Option<u64>) -> Result<Self, Error> {
-        let mut rv = Self {
-            _inner: match HttpClient::new(url) {
-                Ok(h) => h,
-                Err(e) => {
-                    return Err(Error::rpc_error(e));
-                }
-            },
-            block_number: 0,
-            cache: RpcCache::Empty,
-        };
-        let block_height = rv.block_height()?;
-        if let Some(bn) = block_number {
-            if bn > block_height {
-                let msg = format!("invalid block number, exceeds height({})", block_height);
-                Err(Error::invalid_argument(msg))
-            } else {
-                rv.block_number = bn;
-                rv.cache = RpcCache::file_backed(url, bn)?;
-                Ok(rv)
-            }
-        } else {
-            rv.block_number = block_height;
-            rv.cache = RpcCache::file_backed(url, block_height)?;
-            Ok(rv)
-        }
-    }
-
-    pub fn block_number(&self) -> u64 {
-        return self.block_number;
-    }
-
-    pub fn chain_id(&self) -> Result<String, Error> {
-        let status = wait_future(self._inner.status())?.map_err(|e| Error::rpc_error(e))?;
-        Ok(status.node_info.network.to_string())
-    }
-
-    /// returns timestamp of self.block_number
-    pub fn timestamp(&self) -> Result<Timestamp, Error> {
-        let block_info =
-            wait_future(self._inner.block(
-                Height::try_from(self.block_number).map_err(|e| Error::tendermint_error(e))?,
-            ))?
-            .map_err(|e| Error::rpc_error(e))?;
-        let time = block_info.block.header.time;
-        let duration = time
-            .duration_since(Time::unix_epoch())
-            .map_err(|e| Error::tendermint_error(e))?;
-        Ok(Timestamp::from_nanos(
-            duration
-                .as_nanos()
-                .try_into()
-                .map_err(|e| Error::tendermint_error(e))?,
-        ))
-    }
-
-    pub fn block_height(&self) -> Result<u64, Error> {
-        let status = wait_future(self._inner.status())?.map_err(|e| Error::rpc_error(e))?;
-        Ok(status.sync_info.latest_block_height.value())
-    }
-
     pub fn abci_query_raw(&mut self, path_: &str, data: &[u8]) -> Result<Vec<u8>, Error> {
         if let Some(in_db) = self.cache.read(path_, data)? {
             return Ok(in_db);
@@ -275,8 +195,90 @@ impl CwRpcClient {
         self.cache.save()?;
         Ok(result.value)
     }
+}
 
-    pub fn query_bank_all_balances(&mut self, address: &str) -> Result<Vec<(String, u128)>, Error> {
+// protobuf serialize
+fn serialize<M: Message>(m: &M) -> Result<Vec<u8>, Error> {
+    let mut out = Vec::new();
+    match m.encode(&mut out) {
+        Ok(_) => Ok(out),
+        Err(e) => Err(Error::format_error(e)),
+    }
+}
+
+fn wait_future<F: Future>(f: F) -> Result<F::Output, Error> {
+    match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(b) => Ok(b.block_on(f)),
+        Err(e) => Err(Error::tokio_error(e)),
+    }
+}
+
+impl CwClientBackend for CwRpcClient {
+    fn new(url: &str, block_number: Option<u64>) -> Result<Self, Error> {
+        let mut rv = Self {
+            _inner: match HttpClient::new(url) {
+                Ok(h) => h,
+                Err(e) => {
+                    return Err(Error::rpc_error(e));
+                }
+            },
+            block_number: 0,
+            cache: RpcCache::Empty,
+        };
+        let block_height = rv.block_height()?;
+        if let Some(bn) = block_number {
+            if bn > block_height {
+                let msg = format!("invalid block number, exceeds height({})", block_height);
+                Err(Error::invalid_argument(msg))
+            } else {
+                rv.block_number = bn;
+                rv.cache = RpcCache::file_backed(url, bn)?;
+                Ok(rv)
+            }
+        } else {
+            rv.block_number = block_height;
+            rv.cache = RpcCache::file_backed(url, block_height)?;
+            Ok(rv)
+        }
+    }
+
+    fn block_number(&self) -> u64 {
+        return self.block_number;
+    }
+
+    fn chain_id(&mut self) -> Result<String, Error> {
+        let status = wait_future(self._inner.status())?.map_err(|e| Error::rpc_error(e))?;
+        Ok(status.node_info.network.to_string())
+    }
+
+    /// returns timestamp of self.block_number
+    fn timestamp(&mut self) -> Result<Timestamp, Error> {
+        let block_info =
+            wait_future(self._inner.block(
+                Height::try_from(self.block_number).map_err(|e| Error::tendermint_error(e))?,
+            ))?
+            .map_err(|e| Error::rpc_error(e))?;
+        let time = block_info.block.header.time;
+        let duration = time
+            .duration_since(Time::unix_epoch())
+            .map_err(|e| Error::tendermint_error(e))?;
+        Ok(Timestamp::from_nanos(
+            duration
+                .as_nanos()
+                .try_into()
+                .map_err(|e| Error::tendermint_error(e))?,
+        ))
+    }
+
+    fn block_height(&mut self) -> Result<u64, Error> {
+        let status = wait_future(self._inner.status())?.map_err(|e| Error::rpc_error(e))?;
+        Ok(status.sync_info.latest_block_height.value())
+    }
+
+    fn query_bank_all_balances(&mut self, address: &str) -> Result<Vec<(String, u128)>, Error> {
         use crate::contract_vm::rpc_items::cosmos::bank::v1beta1::QueryAllBalancesRequest;
         use crate::contract_vm::rpc_items::cosmos::bank::v1beta1::QueryAllBalancesResponse;
         let request = QueryAllBalancesRequest {
@@ -300,7 +302,7 @@ impl CwRpcClient {
         Ok(balances)
     }
 
-    pub fn query_wasm_contract_smart(
+    fn query_wasm_contract_smart(
         &mut self,
         address: &str,
         query_data: &[u8],
@@ -323,7 +325,7 @@ impl CwRpcClient {
         Ok(resp.data)
     }
 
-    pub fn query_wasm_contract_all(
+    fn query_wasm_contract_state_all(
         &mut self,
         address: &str,
     ) -> Result<BTreeMap<Vec<u8>, Vec<u8>>, Error> {
@@ -349,10 +351,7 @@ impl CwRpcClient {
         Ok(out)
     }
 
-    pub fn query_wasm_contract_info(
-        &mut self,
-        address: &str,
-    ) -> Result<wasm::v1::ContractInfo, Error> {
+    fn query_wasm_contract_info(&mut self, address: &str) -> Result<ContractInfo, Error> {
         use crate::contract_vm::rpc_items::cosmwasm::wasm::v1::QueryContractInfoRequest;
         use crate::contract_vm::rpc_items::cosmwasm::wasm::v1::QueryContractInfoResponse;
         let request = QueryContractInfoRequest {
@@ -368,7 +367,9 @@ impl CwRpcClient {
             }
         };
         if let Some(ci) = resp.contract_info {
-            Ok(ci)
+            Ok(ContractInfo {
+                code_id: ci.code_id,
+            })
         } else {
             Err(Error::invalid_argument(format!(
                 "address {} is most likely not a contract address",
@@ -377,7 +378,7 @@ impl CwRpcClient {
         }
     }
 
-    pub fn query_wasm_contract_code(&mut self, code_id: u64) -> Result<Vec<u8>, Error> {
+    fn query_wasm_contract_code(&mut self, code_id: u64) -> Result<Vec<u8>, Error> {
         use crate::contract_vm::rpc_items::cosmwasm::wasm::v1::QueryCodeRequest;
         use crate::contract_vm::rpc_items::cosmwasm::wasm::v1::QueryCodeResponse;
         let request = QueryCodeRequest { code_id };
@@ -396,7 +397,7 @@ impl CwRpcClient {
 
 #[cfg(test)]
 mod tests {
-    use crate::contract_vm::rpc_mock::rpc::CwRpcClient;
+    use crate::{CwClientBackend, CwRpcClient};
     use cosmwasm_std::{Addr, Uint128};
     use serde::{Deserialize, Serialize};
 
@@ -471,7 +472,7 @@ mod tests {
 
     #[test]
     fn test_rpc_status() {
-        let client = CwRpcClient::new(MALAGA_RPC_URL, Some(MALAGA_BLOCK_NUMBER)).unwrap();
+        let mut client = CwRpcClient::new(MALAGA_RPC_URL, Some(MALAGA_BLOCK_NUMBER)).unwrap();
         let chain_id = client.chain_id().unwrap();
         assert_eq!(chain_id.as_str(), MALAGA_CHAIN_ID);
     }
@@ -505,11 +506,11 @@ mod tests {
     #[test]
     fn test_rpc_contract_large() {
         let mut client = CwRpcClient::new(MALAGA_RPC_URL, Some(MALAGA_BLOCK_NUMBER)).unwrap();
-        let states_pair = client.query_wasm_contract_all(PAIR_ADDRESS).unwrap();
+        let states_pair = client.query_wasm_contract_state_all(PAIR_ADDRESS).unwrap();
         let pair_info_key = Vec::from("pair_info");
         let pair_info: PairInfo =
             serde_json::from_slice(states_pair[&pair_info_key].as_slice()).unwrap();
-        let states_token = client.query_wasm_contract_all(TOKEN_ADDRESS).unwrap();
+        let states_token = client.query_wasm_contract_state_all(TOKEN_ADDRESS).unwrap();
         let token_info_key = Vec::from("token_info");
         let token_info: TokenInfo =
             serde_json::from_slice(states_token[&token_info_key].as_slice()).unwrap();

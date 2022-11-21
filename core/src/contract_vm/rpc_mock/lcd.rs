@@ -1,5 +1,5 @@
 use super::client_backend::ContractInfo;
-use crate::{ClientBackend, Error};
+use crate::{CwClientBackend, Error};
 use chrono::DateTime;
 use cosmwasm_std::Timestamp;
 use oxhttp::model::{Method, Request, Status, Url};
@@ -118,7 +118,7 @@ impl CwLcdClient {
     }
 }
 
-impl ClientBackend for CwLcdClient {
+impl CwClientBackend for CwLcdClient {
     fn new(url: &str, block_number: Option<u64>) -> Result<Self, Error> {
         let mut rv = Self {
             url: url.to_string(),
@@ -232,7 +232,7 @@ mod tests {
     use cosmwasm_std::CanonicalAddr;
     use serde::{Deserialize, Serialize};
 
-    use super::{ClientBackend, CwLcdClient};
+    use super::{CwClientBackend, CwLcdClient};
     const TERRASWAP_FACTORY_ADDRESS: &str =
         "terra1466nf3zuxpya8q9emxukd7vftaf6h4psr0a07srl5zw74zh84yjqxl5qul";
 
