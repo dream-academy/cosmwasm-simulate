@@ -235,8 +235,9 @@ impl CwRpcClient {
         } else {
             let block_height = rv.block_height()?;
             let chain_id = rv.chain_id()?;
-            let timestamp = rv.timestamp()?;
             rv.block_number = block_height;
+            // Don't change this line's order. To fetch the timestamp block_number must be properly initialized
+            let timestamp = rv.timestamp()?;
             rv.cache = RpcCache::file_backed(url, block_height)?;
             rv.cache.set_chain_id(chain_id);
             rv.cache.set_timestamp(timestamp.nanos());
