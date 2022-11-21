@@ -213,6 +213,39 @@ impl Drop for RpcCache {
 }
 
 impl CwRpcClient {
+    pub fn new(url: &str, block_number: Option<u64>) -> Result<Self, Error> {
+        let mut rv = Self {
+            _inner: match HttpClient::new(url) {
+                Ok(h) => h,
+                Err(e) => {
+                    return Err(Error::rpc_error(e));
+                }
+            },
+            block_number: 0,
+            cache: RpcCache::Empty,
+        };
+        if let Some(bn) = block_number {
+            // first check if cache exists
+            rv.cache = RpcCache::file_backed(url, bn)?;
+            if !rv.cache.initialized() {
+                let timestamp = rv.timestamp()?;
+                let chain_id = rv.chain_id()?;
+                rv.cache.set_chain_id(chain_id);
+                rv.cache.set_timestamp(timestamp.nanos());
+            }
+            Ok(rv)
+        } else {
+            let block_height = rv.block_height()?;
+            let chain_id = rv.chain_id()?;
+            let timestamp = rv.timestamp()?;
+            rv.block_number = block_height;
+            rv.cache = RpcCache::file_backed(url, block_height)?;
+            rv.cache.set_chain_id(chain_id);
+            rv.cache.set_timestamp(timestamp.nanos());
+            Ok(rv)
+        }
+    }
+
     pub fn abci_query_raw(&mut self, path_: &str, data: &[u8]) -> Result<Vec<u8>, Error> {
         if let Some(in_db) = self.cache.read(path_, data)? {
             return Ok(in_db);
@@ -265,39 +298,6 @@ fn wait_future<F: Future>(f: F) -> Result<F::Output, Error> {
 }
 
 impl CwClientBackend for CwRpcClient {
-    fn new(url: &str, block_number: Option<u64>) -> Result<Self, Error> {
-        let mut rv = Self {
-            _inner: match HttpClient::new(url) {
-                Ok(h) => h,
-                Err(e) => {
-                    return Err(Error::rpc_error(e));
-                }
-            },
-            block_number: 0,
-            cache: RpcCache::Empty,
-        };
-        if let Some(bn) = block_number {
-            // first check if cache exists
-            rv.cache = RpcCache::file_backed(url, bn)?;
-            if !rv.cache.initialized() {
-                let timestamp = rv.timestamp()?;
-                let chain_id = rv.chain_id()?;
-                rv.cache.set_chain_id(chain_id);
-                rv.cache.set_timestamp(timestamp.nanos());
-            }
-            Ok(rv)
-        } else {
-            let block_height = rv.block_height()?;
-            let chain_id = rv.chain_id()?;
-            let timestamp = rv.timestamp()?;
-            rv.block_number = block_height;
-            rv.cache = RpcCache::file_backed(url, block_height)?;
-            rv.cache.set_chain_id(chain_id);
-            rv.cache.set_timestamp(timestamp.nanos());
-            Ok(rv)
-        }
-    }
-
     fn block_number(&self) -> u64 {
         return self.block_number;
     }

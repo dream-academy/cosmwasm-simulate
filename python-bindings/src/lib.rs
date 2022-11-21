@@ -41,15 +41,15 @@ impl DebugLog {
 #[pymethods]
 impl Model {
     #[new]
-    fn new(
-        protocol: String,
-        url: String,
-        block_number: Option<u64>,
-        bech32_prefix: String,
-    ) -> PyResult<Model> {
-        let model = cosmwasm_simulate::Model::new(&protocol, &url, block_number, &bech32_prefix)
+    fn new(url: String, block_number: Option<u64>, bech32_prefix: String) -> PyResult<Model> {
+        let model = cosmwasm_simulate::Model::new(&url, block_number, &bech32_prefix)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         Ok(Model { inner: model })
+    }
+
+    pub fn block_number(mut self_: PyRefMut<Self>) -> PyResult<u64> {
+        let model = &mut self_.inner;
+        Ok(model.block_number())
     }
 
     pub fn add_custom_code(mut self_: PyRefMut<Self>, code_id: u64, code: &[u8]) -> PyResult<()> {

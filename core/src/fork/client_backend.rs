@@ -8,9 +8,6 @@ pub struct ContractInfo {
     pub code_id: u64,
 }
 pub trait CwClientBackend: CwClientBackendClone + Send + Sync {
-    fn new(url: &str, block_number: Option<u64>) -> Result<Self, Error>
-    where
-        Self: Sized;
     fn block_number(&self) -> u64;
     fn chain_id(&mut self) -> Result<String, Error>;
     fn timestamp(&mut self) -> Result<Timestamp, Error>;

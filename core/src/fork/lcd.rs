@@ -90,6 +90,15 @@ struct ErrorResponseBody {
 }
 
 impl CwLcdClient {
+    pub fn new(url: &str) -> Result<Self, Error> {
+        let mut rv = Self {
+            url: url.to_string(),
+            block_number: 0,
+        };
+        rv.block_number = rv.block_height()?;
+        Ok(rv)
+    }
+
     fn request_inner(&self, uri: &str) -> Result<String, Error> {
         let request_url =
             Url::parse(&format!("{}{}", &self.url, uri)).map_err(|e| Error::format_error(e))?;
@@ -119,24 +128,6 @@ impl CwLcdClient {
 }
 
 impl CwClientBackend for CwLcdClient {
-    fn new(url: &str, block_number: Option<u64>) -> Result<Self, Error> {
-        let mut rv = Self {
-            url: url.to_string(),
-            block_number: 0,
-        };
-        let block_height = rv.block_height()?;
-        let block_number = if let Some(block_number) = block_number {
-            if block_height < block_number {
-                return Err(Error::invalid_argument("LCD: invalid block number"));
-            }
-            block_number
-        } else {
-            block_height
-        };
-        rv.block_number = block_number;
-        Ok(rv)
-    }
-
     fn block_number(&self) -> u64 {
         self.block_number
     }
@@ -245,7 +236,7 @@ mod tests {
 
     #[test]
     fn test_lcd_basic() {
-        let mut lcd_client = CwLcdClient::new("https://phoenix-lcd.terra.dev", None).unwrap();
+        let mut lcd_client = CwLcdClient::new("https://phoenix-lcd.terra.dev").unwrap();
         assert!(lcd_client.block_number() > 2529402);
         assert!(lcd_client.timestamp().unwrap().nanos() > 1668950758945436944);
 
