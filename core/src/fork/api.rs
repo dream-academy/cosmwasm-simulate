@@ -24,9 +24,8 @@ impl RpcMockApi {
         } else {
             let mut bech32_prefix = [0; BECH32_PREFIX_MAX_LEN];
             let bech32_prefix_vec = Vec::from(bech32_prefix_str);
-            for i in 0..bech32_prefix_len {
-                bech32_prefix[i] = bech32_prefix_vec[i];
-            }
+            bech32_prefix[..bech32_prefix_len]
+                .copy_from_slice(&bech32_prefix_vec[..bech32_prefix_len]);
             Ok(RpcMockApi {
                 canonical_length,
                 bech32_prefix,
@@ -37,7 +36,7 @@ impl RpcMockApi {
 }
 
 pub fn human_to_canonical(human: &str, bech32_prefix: &str) -> Result<Vec<u8>, String> {
-    if !human.starts_with(&bech32_prefix) {
+    if !human.starts_with(bech32_prefix) {
         return Err(format!(
             "Invalid input: human address does not begin with bech32 prefix: {}",
             human

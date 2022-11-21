@@ -73,7 +73,7 @@ impl RpcMockQuerier {
     fn env(&self, contract_addr: &Addr) -> Result<Env, Error> {
         let states = self.states.read().unwrap();
         let block_number = states.block_number;
-        let block_timestamp = states.block_timestamp.clone();
+        let block_timestamp = states.block_timestamp;
         let chain_id = states.chain_id.to_string();
         Ok(Env {
             block: cosmwasm_std::BlockInfo {

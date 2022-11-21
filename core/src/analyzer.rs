@@ -23,11 +23,11 @@ pub struct Analyzer {
 
 impl Analyzer {
     pub fn default() -> Self {
-        return Analyzer {
+        Analyzer {
             map_of_basetype: HashMap::new(),
             map_of_struct: HashMap::new(),
             map_of_member: HashMap::new(),
-        };
+        }
     }
 
     pub fn build_member(
@@ -83,18 +83,12 @@ impl Analyzer {
                 };
 
                 //struct
-                let seg = match item.rfind('/') {
-                    None => 0,
-                    Some(idx) => idx,
-                };
+                let seg = item.rfind('/').unwrap_or(0);
                 let (_, short_name) = item.split_at(seg + 1);
                 member.member_def = short_name.to_string();
             } else if name.starts_with("#/definitions") {
                 //struct
-                let seg = match name.rfind('/') {
-                    None => 0,
-                    Some(idx) => idx,
-                };
+                let seg = name.rfind('/').unwrap_or(0);
                 let (_, short_name) = name.split_at(seg + 1);
                 member.member_def = short_name.to_string();
             } else {
@@ -103,7 +97,7 @@ impl Analyzer {
             }
             vec_mem.insert(vec_mem.len(), member);
         }
-        return true;
+        true
     }
 
     pub fn dump_all_definitions(&self) {
@@ -170,10 +164,7 @@ impl Analyzer {
                         None => continue,
                         Some(s) => s,
                     };
-                    let seg = match def_str.rfind('/') {
-                        None => 0,
-                        Some(idx) => idx,
-                    };
+                    let seg = def_str.rfind('/').unwrap_or(0);
                     let (_, short_name) = def_str.split_at(seg + 1);
 
                     vec_struct.insert(p.0.to_string(), short_name.to_string());
@@ -188,7 +179,7 @@ impl Analyzer {
                 base_type.insert("".to_string() + d.0, def.to_string());
             }
         }
-        return true;
+        true
     }
 
     fn analyze_schema(&mut self, path: String) -> bool {
@@ -212,14 +203,14 @@ impl Analyzer {
 
         self.map_of_member
             .insert(title_must_exist.to_string(), HashMap::new());
-        let mut current_member = match self.map_of_member.get_mut(&title_must_exist.to_string()) {
+        let current_member = match self.map_of_member.get_mut(&title_must_exist.to_string()) {
             None => return false,
             Some(c) => c,
         };
         for iter in mapping.iter() {
             if iter.0 == "definitions" {
                 Analyzer::prepare_definitions(
-                    &iter.1,
+                    iter.1,
                     &mut self.map_of_basetype,
                     &mut self.map_of_struct,
                 );
@@ -233,7 +224,7 @@ impl Analyzer {
                     iter.1,
                     properties,
                     &title_must_exist.to_string(),
-                    &mut current_member,
+                    current_member,
                 );
             } else if iter.0 == "anyOf" {
                 let array: &Vec<serde_json::Value> = match iter.1.as_array() {
@@ -274,13 +265,13 @@ impl Analyzer {
                             target_required,
                             properties,
                             &name.to_string(),
-                            &mut current_member,
+                            current_member,
                         );
                     }
                 }
             }
         }
-        return true;
+        true
     }
 
     //load jsonschema file, translate from json string to func:params...
@@ -292,28 +283,28 @@ impl Analyzer {
         for file in all_json_file {
             self.analyze_schema(file.unwrap().path().display().to_string());
         }
-        return true;
+        true
     }
 
-    pub fn auto_load_json_schema(&mut self, file_path: &String) -> bool {
+    pub fn auto_load_json_schema(&mut self, file_path: &str) -> bool {
         let seg = match file_path.rfind('/') {
             None => return false,
             Some(idx) => idx,
         };
         let (parent_path, _) = file_path.split_at(seg);
         println!("Auto loading json schema from {}/schema", parent_path);
-        return self.try_load_json_schema(parent_path.to_string() + "/schema");
+        self.try_load_json_schema(parent_path.to_string() + "/schema")
     }
 }
 
 pub fn load_data_from_file(path: &str) -> Result<Vec<u8>, String> {
     let mut file = match File::open(path) {
-        Err(e) => return Err(format!("failed to open file , error: {}", e).to_string()),
+        Err(e) => return Err(format!("failed to open file , error: {}", e)),
         Ok(f) => f,
     };
     let mut data = Vec::<u8>::new();
     let _size = match file.read_to_end(&mut data) {
-        Err(e) => return Err(format!("failed to read wasm , error: {}", e).to_string()),
+        Err(e) => return Err(format!("failed to read wasm , error: {}", e)),
         Ok(sz) => sz,
     };
     Ok(data)

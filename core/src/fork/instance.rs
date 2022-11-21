@@ -42,10 +42,8 @@ impl RpcContractInstance {
             sender: sender.clone(),
             funds: funds.to_vec(),
         };
-        Ok(
-            call_instantiate(&mut self.instance, env, &info, msg)
-                .map_err(|e| Error::vm_error(e))?,
-        )
+        call_instantiate(&mut self.instance, env, &info, msg)
+                .map_err(Error::vm_error)
     }
 
     pub fn execute(
@@ -59,11 +57,11 @@ impl RpcContractInstance {
             sender: sender.clone(),
             funds: funds.to_vec(),
         };
-        Ok(call_execute(&mut self.instance, env, &info, msg).map_err(|e| Error::vm_error(e))?)
+        call_execute(&mut self.instance, env, &info, msg).map_err(Error::vm_error)
     }
 
     pub fn reply(&mut self, env: &Env, msg: &Reply) -> Result<ContractResult<Response>, Error> {
-        Ok(call_reply(&mut self.instance, env, msg).map_err(|e| Error::vm_error(e))?)
+        call_reply(&mut self.instance, env, msg).map_err(Error::vm_error)
     }
 
     pub fn query(&mut self, env: &Env, wasm_query: &WasmQuery) -> Result<Binary, Error> {
@@ -84,7 +82,7 @@ impl RpcContractInstance {
                             Err(e) => Err(VmError::BackendErr { source: e }),
                         }
                     })
-                    .map_err(|e| Error::vm_error(e))?
+                    .map_err(Error::vm_error)?
                 {
                     Ok(Binary::from(value.as_slice()))
                 } else {
@@ -96,7 +94,7 @@ impl RpcContractInstance {
                 msg,
             } => {
                 match call_query(&mut self.instance, env, msg.as_slice())
-                    .map_err(|e| Error::vm_error(e))?
+                    .map_err(Error::vm_error)?
                 {
                     ContractResult::Ok(r) => Ok(r),
                     ContractResult::Err(e) => Err(Error::vm_error(&e)),
@@ -117,7 +115,7 @@ impl RpcContractInstance {
                 let (b, _) = s.set(key, value);
                 b.map_err(|e| VmError::BackendErr { source: e })
             })
-            .map_err(|e| Error::vm_error(e))?;
+            .map_err(Error::vm_error)?;
         Ok(())
     }
 }

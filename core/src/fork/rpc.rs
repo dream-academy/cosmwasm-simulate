@@ -104,21 +104,21 @@ impl RpcCache {
         let cachedir = format!("{}/{}", homedir, RPC_CACHE_DIRNAME);
         let cachedir_path = Path::new(&cachedir);
         if !cachedir_path.is_dir() {
-            fs::create_dir(cachedir_path).map_err(|e| Error::io_error(e))?;
+            fs::create_dir(cachedir_path).map_err(Error::io_error)?;
         }
         let cachefile = format!("{}/{}", cachedir, filename);
         let cachefile_path = Path::new(&cachefile);
         let (file, inner, initialized) = if cachefile_path.is_file() {
-            let mut file = rwopen(cachefile_path).map_err(|e| Error::io_error(e))?;
+            let mut file = rwopen(cachefile_path).map_err(Error::io_error)?;
             let mut file_contents = String::new();
             let _ = file
                 .read_to_string(&mut file_contents)
-                .map_err(|e| Error::io_error(e))?;
+                .map_err(Error::io_error)?;
             let inner: RpcCacheInner =
-                ron::from_str(&file_contents).map_err(|e| Error::format_error(e))?;
+                ron::from_str(&file_contents).map_err(Error::format_error)?;
             (file, inner, true)
         } else {
-            let file = rwopen(cachefile_path).map_err(|e| Error::io_error(e))?;
+            let file = rwopen(cachefile_path).map_err(Error::io_error)?;
             (file, RpcCacheInner::default(), false)
         };
         Ok(Self::FileBacked {
@@ -137,7 +137,7 @@ impl RpcCache {
         match self {
             // empty always returns None
             Self::Empty => Ok(None),
-            Self::FileBacked { inner, .. } => Ok(inner.db.get(&key).map(|x| x.clone())),
+            Self::FileBacked { inner, .. } => Ok(inner.db.get(&key).cloned()),
         }
     }
 
@@ -155,7 +155,7 @@ impl RpcCache {
         }
     }
 
-    fn write(&mut self, path: &str, data: &[u8], response: &Vec<u8>) -> Result<(), Error> {
+    fn write(&mut self, path: &str, data: &[u8], response: &[u8]) -> Result<(), Error> {
         let key = RpcCacheK {
             path: path.to_string(),
             data: data.to_vec(),
@@ -164,7 +164,7 @@ impl RpcCache {
             // empty always returns None
             Self::Empty => Ok(()),
             Self::FileBacked { inner, .. } => {
-                inner.db.insert(key, response.clone());
+                inner.db.insert(key, response.to_owned());
                 Ok(())
             }
         }
@@ -174,11 +174,9 @@ impl RpcCache {
         match self {
             Self::Empty => Ok(()),
             Self::FileBacked { inner, file, .. } => {
-                let serialized = ron::to_string(inner).map_err(|e| Error::format_error(e))?;
-                file.seek(SeekFrom::Start(0))
-                    .map_err(|e| Error::io_error(e))?;
-                file.write(serialized.as_bytes())
-                    .map_err(|e| Error::io_error(e))?;
+                let serialized = ron::to_string(inner).map_err(Error::format_error)?;
+                file.seek(SeekFrom::Start(0)).map_err(Error::io_error)?;
+                file.write(serialized.as_bytes()).map_err(Error::io_error)?;
                 Ok(())
             }
         }
@@ -266,7 +264,7 @@ impl CwRpcClient {
             self._inner
                 .abci_query(Some(path), data, Some(height), false),
         )?
-        .map_err(|e| Error::rpc_error(e))?;
+        .map_err(Error::rpc_error)?;
         match result.code {
             abci::Code::Ok => {}
             _ => {
@@ -299,14 +297,14 @@ fn wait_future<F: Future>(f: F) -> Result<F::Output, Error> {
 
 impl CwClientBackend for CwRpcClient {
     fn block_number(&self) -> u64 {
-        return self.block_number;
+        self.block_number
     }
 
     fn chain_id(&mut self) -> Result<String, Error> {
         if let Some(chain_id) = self.cache.chain_id() {
             Ok(chain_id)
         } else {
-            let status = wait_future(self._inner.status())?.map_err(|e| Error::rpc_error(e))?;
+            let status = wait_future(self._inner.status())?.map_err(Error::rpc_error)?;
             Ok(status.node_info.network.to_string())
         }
     }
@@ -316,25 +314,26 @@ impl CwClientBackend for CwRpcClient {
         if let Some(timestamp_ns) = self.cache.timestamp() {
             Ok(Timestamp::from_nanos(timestamp_ns))
         } else {
-            let block_info = wait_future(self._inner.block(
-                Height::try_from(self.block_number).map_err(|e| Error::tendermint_error(e))?,
-            ))?
-            .map_err(|e| Error::rpc_error(e))?;
+            let block_info = wait_future(
+                self._inner
+                    .block(Height::try_from(self.block_number).map_err(Error::tendermint_error)?),
+            )?
+            .map_err(Error::rpc_error)?;
             let time = block_info.block.header.time;
             let duration = time
                 .duration_since(Time::unix_epoch())
-                .map_err(|e| Error::tendermint_error(e))?;
+                .map_err(Error::tendermint_error)?;
             Ok(Timestamp::from_nanos(
                 duration
                     .as_nanos()
                     .try_into()
-                    .map_err(|e| Error::tendermint_error(e))?,
+                    .map_err(Error::tendermint_error)?,
             ))
         }
     }
 
     fn block_height(&mut self) -> Result<u64, Error> {
-        let status = wait_future(self._inner.status())?.map_err(|e| Error::rpc_error(e))?;
+        let status = wait_future(self._inner.status())?.map_err(Error::rpc_error)?;
         Ok(status.sync_info.latest_block_height.value())
     }
 
@@ -461,14 +460,12 @@ mod tests {
     use cosmwasm_std::{Addr, Uint128};
     use serde::{Deserialize, Serialize};
 
-    const MALAGA_RPC_URL: &'static str = "https://rpc.malaga-420.cosmwasm.com:443";
-    const MALAGA_CHAIN_ID: &'static str = "malaga-420";
+    const MALAGA_RPC_URL: &str = "https://rpc.malaga-420.cosmwasm.com:443";
+    const MALAGA_CHAIN_ID: &str = "malaga-420";
     const MALAGA_BLOCK_NUMBER: u64 = 2346678;
-    const EOA_ADDRESS: &'static str = "wasm1zcnn5gh37jxg9c6dp4jcjc7995ae0s5f5hj0lj";
-    const PAIR_ADDRESS: &'static str =
-        "wasm15le5evw4regnwf9lrjnpakr2075fcyp4n4yzpelvqcuevzkw2lss46hslz";
-    const TOKEN_ADDRESS: &'static str =
-        "wasm124v54ngky9wxhx87t252x4xfgujmdsu7uhjdugtkkqt39nld0e6st7e64h";
+    const EOA_ADDRESS: &str = "wasm1zcnn5gh37jxg9c6dp4jcjc7995ae0s5f5hj0lj";
+    const PAIR_ADDRESS: &str = "wasm15le5evw4regnwf9lrjnpakr2075fcyp4n4yzpelvqcuevzkw2lss46hslz";
+    const TOKEN_ADDRESS: &str = "wasm124v54ngky9wxhx87t252x4xfgujmdsu7uhjdugtkkqt39nld0e6st7e64h";
 
     #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
     #[serde(rename_all = "snake_case")]
@@ -513,7 +510,7 @@ mod tests {
         pub asset_decimals: [u8; 2],
     }
 
-    #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+    #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
     #[serde(rename_all = "snake_case")]
     pub struct TokenInfo {
         pub name: String,
@@ -523,7 +520,7 @@ mod tests {
         pub mint: Option<MinterData>,
     }
 
-    #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+    #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
     pub struct MinterData {
         pub minter: Addr,
         /// cap is how many more tokens can be issued by the minter
@@ -552,7 +549,7 @@ mod tests {
                 info: AssetInfo::NativeToken {
                     denom: "umlg".to_string(),
                 },
-                amount: Uint128::from(100 as u64),
+                amount: Uint128::from(100_u64),
             },
         };
         let qmsg_bytes = serde_json::to_vec(&qmsg).unwrap();

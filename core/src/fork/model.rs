@@ -167,16 +167,17 @@ impl Model {
             }
             Ok(i) => i,
         };
-        Ok(RpcContractInstance::new(&contract_addr, wasm_instance))
+        Ok(RpcContractInstance::new(contract_addr, wasm_instance))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn handle_submessage_instantiate(
         &mut self,
         admin: &Option<String>,
         origin: &Addr,
         code_id: u64,
         msg: &Binary,
-        funds: &Vec<Coin>,
+        funds: &[Coin],
         sub_msg_id: u64,
         reply_on: &ReplyOn,
     ) -> Result<ContractResult<Response>, Error> {
@@ -188,12 +189,12 @@ impl Model {
                         None,
                     )
                 } else {
-                    let (res, new_addr) = self.instantiate_inner(code_id, &origin, msg, funds)?;
+                    let (res, new_addr) = self.instantiate_inner(code_id, origin, msg, funds)?;
                     (res, new_addr)
                 }
             }
             None => {
-                let (res, new_addr) = self.instantiate_inner(code_id, &origin, msg, funds)?;
+                let (res, new_addr) = self.instantiate_inner(code_id, origin, msg, funds)?;
                 (res, new_addr)
             }
         };
@@ -252,11 +253,11 @@ impl Model {
         origin: &Addr,
         target_addr: &Addr,
         msg: &Binary,
-        funds: &Vec<Coin>,
+        funds: &[Coin],
         sub_msg_id: u64,
         reply_on: &ReplyOn,
     ) -> Result<ContractResult<Response>, Error> {
-        let response = self.execute_inner(&target_addr, &origin, msg.as_slice(), funds)?;
+        let response = self.execute_inner(target_addr, origin, msg.as_slice(), funds)?;
         let do_reply = match reply_on {
             ReplyOn::Always => true,
             ReplyOn::Success => response.is_ok(),
@@ -308,7 +309,7 @@ impl Model {
     ) -> Result<ContractResult<Response>, Error> {
         // last_response is the response of the latest execution
         // If there are no submessages, this will be returned. Otherwise, response from the submessages will be returned
-        if response.messages.len() == 0 {
+        if response.messages.is_empty() {
             return Ok(ContractResult::Ok(response.clone()));
         }
         // this will be overwritten at least once
@@ -351,7 +352,7 @@ impl Model {
                     self.states
                         .write()
                         .unwrap()
-                        .bank_execute(&origin, &bank_msg)?
+                        .bank_execute(origin, bank_msg)?
                 }
                 _ => unimplemented!(),
             };
@@ -379,9 +380,7 @@ impl Model {
         let empty_log = DebugLog::new();
         let state_copy = self.clone();
 
-        let (res, _) = self
-            .instantiate_inner(code_id, &Addr::unchecked(sender), msg, funds)
-            .map_err(|e| e)?;
+        let (res, _) = self.instantiate_inner(code_id, &Addr::unchecked(sender), msg, funds)?;
         if res.is_err() {
             let orig_state = mem::replace(self, state_copy);
             let debug_log: DebugLog =
@@ -461,7 +460,7 @@ impl Model {
         let mut instance = RpcContractInstance::new(&contract_addr, wasm_instance);
         let env = self.env(&contract_addr)?;
         // propagate contract error downwards
-        let response = match instance.instantiate(&env, msg, &sender, funds)? {
+        let response = match instance.instantiate(&env, msg, sender, funds)? {
             ContractResult::Ok(r) => {
                 let instantiate_event = Event::new("instantiate")
                     .add_attribute("code_id", code_id.to_string())
@@ -494,8 +493,7 @@ impl Model {
         let sender = self.sender.clone();
         let state_copy = self.clone();
         if self
-            .execute_inner(contract_addr, &Addr::unchecked(sender), msg, funds)
-            .map_err(|e| e)?
+            .execute_inner(contract_addr, &Addr::unchecked(sender), msg, funds)?
             .is_err()
         {
             let orig_state = mem::replace(self, state_copy);
@@ -540,7 +538,7 @@ impl Model {
 
         // execute contract code
         // propagate contract error downwards
-        let response = match instance.execute(&env, msg, &sender, funds)? {
+        let response = match instance.execute(&env, msg, sender, funds)? {
             ContractResult::Ok(r) => {
                 self.debug_log.lock().unwrap().append_log(&r);
                 r
@@ -569,7 +567,7 @@ impl Model {
 
     pub fn bank_query(&mut self, bank_query_: &[u8]) -> Result<Binary, Error> {
         let bank_query: BankQuery =
-            from_binary(&Binary::from(bank_query_)).map_err(|e| Error::format_error(e))?;
+            from_binary(&Binary::from(bank_query_)).map_err(Error::format_error)?;
         self.states.write().unwrap().bank_query(&bank_query)
     }
 
@@ -591,7 +589,7 @@ impl Model {
     fn env(&self, contract_addr: &Addr) -> Result<Env, Error> {
         let states = self.states.read().unwrap();
         let block_number = states.block_number;
-        let block_timestamp = states.block_timestamp.clone();
+        let block_timestamp = states.block_timestamp;
         let chain_id = states.chain_id.to_string();
         Ok(Env {
             block: cosmwasm_std::BlockInfo {
@@ -704,7 +702,7 @@ mod test {
 
     use crate::{fork::debug_log::DebugLogEntry, fork::model::Model};
 
-    const MALAGA_RPC_URL: &'static str = "https://rpc.malaga-420.cosmwasm.com:443";
+    const MALAGA_RPC_URL: &str = "https://rpc.malaga-420.cosmwasm.com:443";
     const MALAGA_BLOCK_NUMBER: u64 = 2326474;
     const PAIR_ADDRESS_MALAGA: &str =
         "wasm15le5evw4regnwf9lrjnpakr2075fcyp4n4yzpelvqcuevzkw2lss46hslz";
@@ -741,7 +739,7 @@ mod test {
 
         // balance before the swap
         let query_balance_msg_json = json!({
-            "balance": {"address": my_address.clone(), }
+            "balance": {"address": my_address, }
         });
         let query_balance_msg = serde_json::to_string(&query_balance_msg_json).unwrap();
         let resp = model
@@ -750,7 +748,7 @@ mod test {
         let resp_json: serde_json::Value = serde_json::from_slice(resp.as_slice()).unwrap();
         let token_balance_before = u128::from_str(resp_json["balance"].as_str().unwrap()).unwrap();
         let bank_query = BankQuery::Balance {
-            address: my_address.clone(),
+            address: my_address,
             denom: "umlg".to_string(),
         };
         let resp = model
@@ -808,7 +806,7 @@ mod test {
         let prev_block_num = model.states.read().unwrap().block_number;
         // execute the swap transaction
         let log = model
-            .execute(&vault_router_address, loan_msg.as_bytes(), &vec![])
+            .execute(&vault_router_address, loan_msg.as_bytes(), &[])
             .unwrap();
 
         assert_eq!(
@@ -830,9 +828,7 @@ mod test {
         let pair_address = Addr::unchecked(PAIR_ADDRESS_MALAGA);
         model.cheat_code(&pair_address, wasm_code).unwrap();
         let msg = to_binary(&ExecuteMsg::TestQuerySelf {}).unwrap();
-        let res = model
-            .execute(&pair_address, msg.as_slice(), &vec![])
-            .unwrap();
+        let res = model.execute(&pair_address, msg.as_slice(), &[]).unwrap();
         for log in res.logs {
             for event in log.events {
                 if event.ty == "read_number" {
@@ -856,9 +852,7 @@ mod test {
 
         // set NUMBER to 2
         let msg = to_binary(&ExecuteMsg::TestQuerySelf {}).unwrap();
-        let _ = model
-            .execute(&pair_address, msg.as_slice(), &vec![])
-            .unwrap();
+        let _ = model.execute(&pair_address, msg.as_slice(), &[]).unwrap();
 
         // query value of NUMBER
         let msg = to_binary(&QueryMsg::ReadNumber {}).unwrap();
@@ -867,9 +861,7 @@ mod test {
 
         // run failing execute()
         let msg = to_binary(&ExecuteMsg::TestAtomic {}).unwrap();
-        let _ = model
-            .execute(&pair_address, msg.as_slice(), &vec![])
-            .unwrap();
+        let _ = model.execute(&pair_address, msg.as_slice(), &[]).unwrap();
 
         // query value of NUMBER again, it should be same as previous value
         let msg = to_binary(&QueryMsg::ReadNumber {}).unwrap();

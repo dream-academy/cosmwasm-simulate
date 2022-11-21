@@ -133,7 +133,7 @@ impl AllStates {
 
         let balances = self.get_bank_state(owner).unwrap();
         if let Some(balance) = balances.get(denom) {
-            Ok(balance.clone())
+            Ok(*balance)
         } else {
             Ok(Uint128::new(0))
         }
@@ -155,7 +155,7 @@ impl AllStates {
             .iter()
             .map(|(d, v)| Coin {
                 denom: d.to_string(),
-                amount: v.clone(),
+                amount: *v,
             })
             .collect();
         Ok(coins)
@@ -241,19 +241,19 @@ impl AllStates {
     pub fn bank_query(&mut self, bank_query: &BankQuery) -> Result<Binary, Error> {
         match bank_query {
             BankQuery::Balance { address, denom } => {
-                let balance = self.get_balance(&Addr::unchecked(address), &denom)?;
+                let balance = self.get_balance(&Addr::unchecked(address), denom)?;
                 let response = BalanceResponse {
                     amount: Coin {
                         denom: denom.to_string(),
                         amount: balance,
                     },
                 };
-                Ok(to_binary(&response).map_err(|e| Error::std_error(e))?)
+                Ok(to_binary(&response).map_err(Error::std_error)?)
             }
             BankQuery::AllBalances { address } => {
                 let balances = self.get_balances(&Addr::unchecked(address))?;
                 let response = AllBalanceResponse { amount: balances };
-                Ok(to_binary(&response).map_err(|e| Error::std_error(e))?)
+                Ok(to_binary(&response).map_err(Error::std_error)?)
             }
             _ => unimplemented!(),
         }
