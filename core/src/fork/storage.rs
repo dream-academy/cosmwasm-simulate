@@ -1,4 +1,4 @@
-use crate::rpc_mock::ContractStorage;
+use crate::ContractStorage;
 use cosmwasm_std::{Order, Record};
 use cosmwasm_vm::{BackendError, BackendResult, GasInfo, Storage};
 

@@ -1,6 +1,5 @@
-use crate::contract_vm::rpc_mock::{AllStates, DebugLog, RpcContractInstance};
-use crate::rpc_mock::{ContractState, RpcMockApi, RpcMockStorage};
-use crate::Error;
+use crate::fork::AllStates;
+use crate::{ContractState, DebugLog, Error, RpcContractInstance, RpcMockApi, RpcMockStorage};
 use cosmwasm_std::{
     from_binary, from_slice, to_binary, Addr, Binary, ContractInfo, ContractResult, Env,
     QueryRequest, SystemResult, WasmQuery,

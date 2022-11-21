@@ -6,10 +6,8 @@ use cosmwasm_vm::{
     call_execute, call_instantiate, call_query, call_reply, Instance, Storage, VmError,
 };
 
-use crate::contract_vm::rpc_mock::{
-    querier::RpcMockQuerier, RpcBackend, RpcMockApi, RpcMockStorage,
-};
-use crate::contract_vm::Error;
+use crate::fork::{querier::RpcMockQuerier, RpcBackend, RpcMockApi, RpcMockStorage};
+use crate::Error;
 
 type RpcInstance = Instance<RpcMockApi, RpcMockStorage, RpcMockQuerier>;
 

@@ -1,11 +1,9 @@
-use crate::contract_vm::rpc_mock::api::canonical_to_human;
-use crate::contract_vm::rpc_mock::{
+use crate::fork::api::canonical_to_human;
+use crate::fork::{
     AllStates, CwRpcClient, DebugLog, RpcContractInstance, RpcMockApi, RpcMockQuerier,
     RpcMockStorage,
 };
-use crate::contract_vm::Error;
-use crate::rpc_mock::{ContractState, ContractStorage};
-use crate::{rpc_items, CwClientBackend};
+use crate::{rpc_items, ContractState, ContractStorage, CwClientBackend, Error};
 
 use cosmwasm_std::{
     from_binary, Addr, BankMsg, BankQuery, Binary, Coin, ContractInfo, ContractResult, CosmosMsg,
@@ -703,7 +701,7 @@ mod test {
     use serde_json::json;
     use std::str::FromStr;
 
-    use crate::{contract_vm::rpc_mock::model::Model, rpc_mock::debug_log::DebugLogEntry};
+    use crate::{fork::debug_log::DebugLogEntry, fork::model::Model};
 
     const MALAGA_RPC_URL: &'static str = "https://rpc.malaga-420.cosmwasm.com:443";
     const MALAGA_BLOCK_NUMBER: u64 = 2326474;

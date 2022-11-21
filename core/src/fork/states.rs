@@ -1,5 +1,5 @@
-use crate::contract_vm::Error;
-use crate::rpc_mock::CwClientBackend;
+use crate::CwClientBackend;
+use crate::Error;
 use cosmwasm_std::{
     to_binary, Addr, AllBalanceResponse, BalanceResponse, BankMsg, BankQuery, Binary, Coin,
     ContractResult, Event, Response, Timestamp, Uint128,

@@ -279,8 +279,8 @@ impl CwClientBackend for CwRpcClient {
     }
 
     fn query_bank_all_balances(&mut self, address: &str) -> Result<Vec<(String, u128)>, Error> {
-        use crate::contract_vm::rpc_items::cosmos::bank::v1beta1::QueryAllBalancesRequest;
-        use crate::contract_vm::rpc_items::cosmos::bank::v1beta1::QueryAllBalancesResponse;
+        use crate::rpc_items::cosmos::bank::v1beta1::QueryAllBalancesRequest;
+        use crate::rpc_items::cosmos::bank::v1beta1::QueryAllBalancesResponse;
         let request = QueryAllBalancesRequest {
             address: address.to_string(),
             pagination: None,
@@ -307,8 +307,8 @@ impl CwClientBackend for CwRpcClient {
         address: &str,
         query_data: &[u8],
     ) -> Result<Vec<u8>, Error> {
-        use crate::contract_vm::rpc_items::cosmwasm::wasm::v1::QuerySmartContractStateRequest;
-        use crate::contract_vm::rpc_items::cosmwasm::wasm::v1::QuerySmartContractStateResponse;
+        use crate::rpc_items::cosmwasm::wasm::v1::QuerySmartContractStateRequest;
+        use crate::rpc_items::cosmwasm::wasm::v1::QuerySmartContractStateResponse;
         let request = QuerySmartContractStateRequest {
             address: address.to_string(),
             query_data: query_data.to_vec(),
@@ -329,8 +329,8 @@ impl CwClientBackend for CwRpcClient {
         &mut self,
         address: &str,
     ) -> Result<BTreeMap<Vec<u8>, Vec<u8>>, Error> {
-        use crate::contract_vm::rpc_items::cosmwasm::wasm::v1::QueryAllContractStateRequest;
-        use crate::contract_vm::rpc_items::cosmwasm::wasm::v1::QueryAllContractStateResponse;
+        use crate::rpc_items::cosmwasm::wasm::v1::QueryAllContractStateRequest;
+        use crate::rpc_items::cosmwasm::wasm::v1::QueryAllContractStateResponse;
         let request = QueryAllContractStateRequest {
             address: address.to_string(),
             pagination: None,
@@ -352,8 +352,8 @@ impl CwClientBackend for CwRpcClient {
     }
 
     fn query_wasm_contract_info(&mut self, address: &str) -> Result<ContractInfo, Error> {
-        use crate::contract_vm::rpc_items::cosmwasm::wasm::v1::QueryContractInfoRequest;
-        use crate::contract_vm::rpc_items::cosmwasm::wasm::v1::QueryContractInfoResponse;
+        use crate::rpc_items::cosmwasm::wasm::v1::QueryContractInfoRequest;
+        use crate::rpc_items::cosmwasm::wasm::v1::QueryContractInfoResponse;
         let request = QueryContractInfoRequest {
             address: address.to_string(),
         };
@@ -379,8 +379,8 @@ impl CwClientBackend for CwRpcClient {
     }
 
     fn query_wasm_contract_code(&mut self, code_id: u64) -> Result<Vec<u8>, Error> {
-        use crate::contract_vm::rpc_items::cosmwasm::wasm::v1::QueryCodeRequest;
-        use crate::contract_vm::rpc_items::cosmwasm::wasm::v1::QueryCodeResponse;
+        use crate::rpc_items::cosmwasm::wasm::v1::QueryCodeRequest;
+        use crate::rpc_items::cosmwasm::wasm::v1::QueryCodeResponse;
         let request = QueryCodeRequest { code_id };
         let path = "/cosmwasm.wasm.v1.Query/Code";
         let data = serialize(&request).unwrap();

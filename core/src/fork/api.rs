@@ -1,7 +1,7 @@
 use bech32::{self, FromBase32, ToBase32, Variant};
 use cosmwasm_vm::{BackendApi, BackendError, BackendResult, GasInfo};
 
-use crate::contract_vm::Error;
+use crate::Error;
 
 const BECH32_PREFIX_MAX_LEN: usize = 10;
 

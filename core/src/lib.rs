@@ -1,4 +1,8 @@
-mod contract_vm;
+pub mod analyzer;
+pub mod error;
+pub mod fork;
 
-pub use contract_vm::*;
+pub use error::Error;
+pub use fork::*;
+
 pub use cosmwasm_std::{Addr, Coin, Timestamp, Uint128};
