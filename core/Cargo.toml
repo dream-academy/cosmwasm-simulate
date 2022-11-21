@@ -13,8 +13,8 @@ default = ["iterator"]
 name = "cosmwasm_simulate"
 
 [dependencies]
-cosmwasm-vm = "1.1.5"
-cosmwasm-std = "1.1.5"
+cosmwasm-vm = { path = "../cosmwasm/packages/vm" }
+cosmwasm-std = { path = "../cosmwasm/packages/std" }
 wasmer = "2.3.0"
 wasmer-compiler-singlepass = "2.3.0"
 websocket="0.24.0"
@@ -35,6 +35,7 @@ oxhttp = { version = "0.1.5", features = ["rustls"] }
 chrono = "0.4.23"
 base64 = "0.13.1"
 test-contract = { path = "../test-contract" }
+test-contract-cov = { path = "../test-contract-cov" }
 
 [build-dependencies]
 prost-build = "0.11.1"

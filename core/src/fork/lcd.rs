@@ -113,8 +113,7 @@ impl CwLcdClient {
         if status == Status::OK {
             Ok(body_str)
         } else {
-            let err_body: ErrorResponseBody =
-                from_str(&body_str).map_err(Error::format_error)?;
+            let err_body: ErrorResponseBody = from_str(&body_str).map_err(Error::format_error)?;
             Err(Error::http_error(&err_body.message))
         }
     }
@@ -155,8 +154,7 @@ impl CwClientBackend for CwLcdClient {
         address: &str,
     ) -> Result<Vec<(String, u128)>, crate::Error> {
         let body_str = self.request_inner(&format!("/cosmos/bank/v1beta1/balances/{}", address))?;
-        let balances: BankBalancesResponse =
-            from_str(&body_str).map_err(Error::format_error)?;
+        let balances: BankBalancesResponse = from_str(&body_str).map_err(Error::format_error)?;
         let mut out = Vec::new();
         for coin in balances.balances {
             out.push((coin.denom, coin.amount.parse().unwrap()));
@@ -174,12 +172,13 @@ impl CwClientBackend for CwLcdClient {
             "/cosmwasm/wasm/v1/contract/{}/smart/{}",
             address, query_data_b64
         ))?;
-        let response: serde_json::Value =
-            from_str(&body_str).map_err(Error::format_error)?;
+        let response: serde_json::Value = from_str(&body_str).map_err(Error::format_error)?;
         if let Some(data) = response.get("data") {
             Ok(data.to_string().as_bytes().to_vec())
         } else {
-            Err(Error::format_error(&"key 'data' not present in response".to_string()))
+            Err(Error::format_error(
+                &"key 'data' not present in response".to_string(),
+            ))
         }
     }
 
@@ -201,8 +200,7 @@ impl CwClientBackend for CwLcdClient {
 
     fn query_wasm_contract_info(&mut self, address: &str) -> Result<ContractInfo, crate::Error> {
         let body_str = self.request_inner(&format!("/cosmwasm/wasm/v1/contract/{}", address))?;
-        let response: ContractInfoResponse =
-            from_str(&body_str).map_err(Error::format_error)?;
+        let response: ContractInfoResponse = from_str(&body_str).map_err(Error::format_error)?;
         Ok(ContractInfo {
             code_id: response.contract_info.code_id.parse().unwrap(),
         })

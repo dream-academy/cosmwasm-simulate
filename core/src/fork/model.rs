@@ -1,15 +1,15 @@
 use crate::fork::api::canonical_to_human;
-use crate::fork::{
-    AllStates, CwRpcClient, DebugLog, RpcContractInstance, RpcMockApi, RpcMockQuerier,
-    RpcMockStorage,
+use crate::{
+    rpc_items, AllStates, ContractState, ContractStorage, CwClientBackend, CwRpcClient, DebugLog,
+    Error, RpcContractInstance, RpcInstance, RpcMockApi, RpcMockQuerier, RpcMockStorage,
 };
-use crate::{rpc_items, ContractState, ContractStorage, CwClientBackend, Error};
 
 use cosmwasm_std::{
     from_binary, Addr, BankMsg, BankQuery, Binary, Coin, ContractInfo, ContractResult, CosmosMsg,
     Env, Event, Reply, ReplyOn, Response, SubMsgResponse, SubMsgResult, Timestamp, Uint128,
     WasmMsg, WasmQuery,
 };
+use cosmwasm_vm::internals::instance_from_module;
 use cosmwasm_vm::{Backend, InstanceOptions};
 use prost::Message;
 use sha2::{Digest, Sha256};
@@ -31,6 +31,8 @@ pub struct Model {
     debug_log: Arc<Mutex<DebugLog>>,
     // for userprovided code
     custom_codes: HashMap<u64, Vec<u8>>,
+    // for code coverage
+    pub code_coverage_enabled: bool,
 }
 
 const WASM_MAGIC: [u8; 4] = [0, 97, 115, 109];
@@ -49,6 +51,19 @@ pub fn maybe_unzip(input: Vec<u8>) -> Result<Vec<u8>, Error> {
     }
 }
 
+pub fn create_instance_from_code(
+    code: &[u8],
+    deps: RpcBackend,
+    options: InstanceOptions,
+) -> Result<RpcInstance, Error> {
+    use cosmwasm_vm::internals::compile;
+    let module = compile(code, None, &[]).map_err(Error::vm_error)?;
+    match instance_from_module(&module, deps, options.gas_limit, options.print_debug, None) {
+        Err(e) => Err(Error::vm_error(e)),
+        Ok(i) => Ok(i),
+    }
+}
+
 impl Clone for Model {
     fn clone(&self) -> Self {
         Model {
@@ -57,6 +72,7 @@ impl Clone for Model {
             code_id_counters: self.code_id_counters.clone(),
             debug_log: Arc::new(Mutex::new(self.debug_log.lock().unwrap().clone())),
             custom_codes: self.custom_codes.clone(),
+            code_coverage_enabled: self.code_coverage_enabled,
         }
     }
 }
@@ -70,6 +86,7 @@ impl Model {
             code_id_counters: HashMap::new(),
             debug_log: Arc::new(Mutex::new(DebugLog::new())),
             custom_codes: HashMap::new(),
+            code_coverage_enabled: false,
         })
     }
 
@@ -82,6 +99,7 @@ impl Model {
             code_id_counters: HashMap::new(),
             debug_log: Arc::new(Mutex::new(DebugLog::new())),
             custom_codes: HashMap::new(),
+            code_coverage_enabled: false,
         })
     }
 
@@ -404,24 +422,26 @@ impl Model {
         let contract_addr = self.generate_address(code_id)?;
 
         // transfer coins
-        let bank_msg = BankMsg::Send {
-            to_address: contract_addr.to_string(),
-            amount: funds.to_vec(),
-        };
-        match self
-            .states
-            .write()
-            .unwrap()
-            .bank_execute(sender, &bank_msg)?
-        {
-            ContractResult::Ok(r) => {
-                self.debug_log.lock().unwrap().append_log(&r);
-            }
-            ContractResult::Err(e) => {
-                self.debug_log.lock().unwrap().set_err_msg(&e);
-                return Ok((ContractResult::Err(e), None));
-            }
-        };
+        if funds.len() > 0 {
+            let bank_msg = BankMsg::Send {
+                to_address: contract_addr.to_string(),
+                amount: funds.to_vec(),
+            };
+            match self
+                .states
+                .write()
+                .unwrap()
+                .bank_execute(sender, &bank_msg)?
+            {
+                ContractResult::Ok(r) => {
+                    self.debug_log.lock().unwrap().append_log(&r);
+                }
+                ContractResult::Err(e) => {
+                    self.debug_log.lock().unwrap().set_err_msg(&e);
+                    return Ok((ContractResult::Err(e), None));
+                }
+            };
+        }
 
         // because contract address does not exist on chain, create mock storage from empty set
         let emtpy_storage = Arc::new(RwLock::new(ContractStorage::new()));
@@ -441,13 +461,8 @@ impl Model {
                     .query_wasm_contract_code(code_id)?,
             )?
         };
-        let wasm_instance =
-            match cosmwasm_vm::Instance::from_code(wasm_code.as_slice(), deps, options, None) {
-                Err(e) => {
-                    return Err(Error::vm_error(e));
-                }
-                Ok(i) => i,
-            };
+        let wasm_instance = create_instance_from_code(wasm_code.as_slice(), deps, options)?;
+
         // create a temporary contract_state, which will be deleted if instantiation fails
         let contract_state = ContractState {
             code: wasm_code,
@@ -479,6 +494,16 @@ impl Model {
                 return Ok((ContractResult::Err(e), None));
             }
         };
+        if self.code_coverage_enabled {
+            let cov = instance.dump_coverage()?;
+            self.debug_log
+                .lock()
+                .unwrap()
+                .code_coverage
+                .entry(contract_addr.to_string())
+                .or_insert_with(Vec::new)
+                .push(cov);
+        }
         let response = self.handle_response(&contract_addr, &response)?;
         Ok((response, Some(contract_addr)))
     }
@@ -516,25 +541,27 @@ impl Model {
         let env = self.env(contract_addr)?;
         let mut instance = self.create_instance(contract_addr)?;
 
-        // transfer coins
-        let bank_msg = BankMsg::Send {
-            to_address: contract_addr.to_string(),
-            amount: funds.to_vec(),
-        };
-        match self
-            .states
-            .write()
-            .unwrap()
-            .bank_execute(sender, &bank_msg)?
-        {
-            ContractResult::Ok(r) => {
-                self.debug_log.lock().unwrap().append_log(&r);
-            }
-            ContractResult::Err(e) => {
-                self.debug_log.lock().unwrap().set_err_msg(&e);
-                return Ok(ContractResult::Err(e));
-            }
-        };
+        if funds.len() > 0 {
+            // transfer coins
+            let bank_msg = BankMsg::Send {
+                to_address: contract_addr.to_string(),
+                amount: funds.to_vec(),
+            };
+            match self
+                .states
+                .write()
+                .unwrap()
+                .bank_execute(sender, &bank_msg)?
+            {
+                ContractResult::Ok(r) => {
+                    self.debug_log.lock().unwrap().append_log(&r);
+                }
+                ContractResult::Err(e) => {
+                    self.debug_log.lock().unwrap().set_err_msg(&e);
+                    return Ok(ContractResult::Err(e));
+                }
+            };
+        }
 
         // execute contract code
         // propagate contract error downwards
@@ -548,6 +575,16 @@ impl Model {
                 return Ok(ContractResult::Err(e));
             }
         };
+        if self.code_coverage_enabled {
+            let cov = instance.dump_coverage()?;
+            self.debug_log
+                .lock()
+                .unwrap()
+                .code_coverage
+                .entry(contract_addr.to_string())
+                .or_insert_with(Vec::new)
+                .push(cov);
+        }
         self.handle_response(contract_addr, &response)
     }
 
@@ -561,6 +598,16 @@ impl Model {
         };
         // TODO: fix this, propagate contract error down
         let result = instance.query(&env, &wasm_query)?;
+        if self.code_coverage_enabled {
+            let cov = instance.dump_coverage()?;
+            self.debug_log
+                .lock()
+                .unwrap()
+                .code_coverage
+                .entry(contract_addr.to_string())
+                .or_insert_with(Vec::new)
+                .push(cov);
+        }
         // prevent deallocation of box
         Ok(result)
     }

@@ -1,4 +1,5 @@
 pub mod analyzer;
+pub mod coverage;
 pub mod error;
 pub mod fork;
 

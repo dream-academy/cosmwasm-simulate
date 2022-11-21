@@ -1,5 +1,5 @@
 [workspace]
 
 members = [
-    "core", "python-bindings", "test-contract"
+    "core", "python-bindings", "test-contract", "test-contract-cov"
 ]

@@ -9,11 +9,11 @@ use cosmwasm_vm::{
 use crate::fork::{querier::RpcMockQuerier, RpcBackend, RpcMockApi, RpcMockStorage};
 use crate::Error;
 
-type RpcInstance = Instance<RpcMockApi, RpcMockStorage, RpcMockQuerier>;
+pub type RpcInstance = Instance<RpcMockApi, RpcMockStorage, RpcMockQuerier>;
 
 pub struct RpcContractInstance {
     contract_info: ContractInfo,
-    instance: RpcInstance,
+    pub instance: RpcInstance,
 }
 
 impl RpcContractInstance {
@@ -42,8 +42,7 @@ impl RpcContractInstance {
             sender: sender.clone(),
             funds: funds.to_vec(),
         };
-        call_instantiate(&mut self.instance, env, &info, msg)
-                .map_err(Error::vm_error)
+        call_instantiate(&mut self.instance, env, &info, msg).map_err(Error::vm_error)
     }
 
     pub fn execute(

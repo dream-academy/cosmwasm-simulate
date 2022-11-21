@@ -18,6 +18,12 @@ fn main() -> Result<()> {
         .current_dir("../test-contract")
         .env("CARGO_TARGET_DIR", env::var_os("OUT_DIR").unwrap())
         .spawn()
-        .expect("Failed to build test contract");
+        .expect("Failed to build test_contract");
+    let _ = Command::new("cargo")
+        .arg("wasm")
+        .current_dir("../test-contract-cov")
+        .env("CARGO_TARGET_DIR", env::var_os("OUT_DIR").unwrap())
+        .spawn()
+        .expect("Failed to build test_contract_cov");
     Ok(())
 }
