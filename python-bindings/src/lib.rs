@@ -36,6 +36,14 @@ impl DebugLog {
         let debug_log = &self_.inner;
         Ok(debug_log.get_stdout())
     }
+
+    fn get_code_coverage_for_address(
+        self_: PyRefMut<Self>,
+        address: &str,
+    ) -> PyResult<Vec<Vec<u8>>> {
+        let debug_log = &self_.inner;
+        Ok(debug_log.get_code_coverage_for_address(address))
+    }
 }
 
 #[pymethods]
@@ -187,6 +195,18 @@ impl Model {
         model
             .cheat_storage(&contract_addr, key, value)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        Ok(())
+    }
+
+    pub fn enable_code_coverage(mut self_: PyRefMut<Self>) -> PyResult<()> {
+        let model = &mut self_.inner;
+        model.enable_code_coverage();
+        Ok(())
+    }
+
+    pub fn disable_code_coverage(mut self_: PyRefMut<Self>) -> PyResult<()> {
+        let model = &mut self_.inner;
+        model.disable_code_coverage();
         Ok(())
     }
 }

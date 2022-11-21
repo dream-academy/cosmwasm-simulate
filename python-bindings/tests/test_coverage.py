@@ -34,6 +34,17 @@ def test_swap():
     logs = m.execute(PAIR_ADDR, swap_msg, [("umlg", 100)])
 
 
+def get_contract_addr_from_instantiate_response(log, code_id):
+    for e in log:
+        events = json.loads(e)["events"]
+        for event in events:
+            if event["type"] == "instantiate":
+                o = {x["key"]: x["value"] for x in event["attributes"]}
+                if o["code_id"] == str(code_id):
+                    return o["_contract_address"]
+    raise Exception("not found")
+
+
 if __name__ == "__main__":
     FACTORY_ADDR = "wasm1hczjykytm4suw4586j5v42qft60gc4j307gf7cxuazfg7jxt4h4sjvp7rx"
     TOKEN_ADDR = "wasm124v54ngky9wxhx87t252x4xfgujmdsu7uhjdugtkkqt39nld0e6st7e64h"
@@ -46,12 +57,19 @@ if __name__ == "__main__":
 
     m = Model(RPC_URL, RPC_BN, "wasm")
     m.cheat_message_sender(MY_ADDRESS)
+    m.enable_code_coverage()
 
     CODE_PATH = "/home/procfs/cosmwasm-simulate/target/wasm32-unknown-unknown/release/test_contract_cov.wasm"
     with open(CODE_PATH, "rb") as f:
         code = f.read()
-    msg = json.dumps({"flow": {}}).encode()
-    m.cheat_code(PAIR_ADDR, code)
-    logs = m.execute(PAIR_ADDR, msg, [])
-    print(logs.get_log())
-    print(logs.get_err_msg())
+    m.add_custom_code(1337, code)
+
+    imsg = json.dumps({}).encode()
+    res = m.instantiate(1337, imsg, [])
+    print(res.get_err_msg())
+    exit()
+    contract_addr = get_contract_addr_from_instantiate_response(res.get_log(), 1337)
+
+    covs = res.get_code_coverage_for_address(contract_addr)
+    with open("cov", "wb") as f:
+        f.write(bytearray(covs[0]))

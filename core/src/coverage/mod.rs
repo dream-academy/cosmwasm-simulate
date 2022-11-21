@@ -1,4 +1,4 @@
-use crate::{Error, Model, RpcContractInstance};
+use crate::{DebugLog, Error, Model, RpcContractInstance};
 use cosmwasm_vm::call_raw;
 use serde::{Deserialize, Serialize};
 
@@ -7,6 +7,16 @@ static COVERAGE_MAX_LEN: usize = 0x100000;
 #[derive(Serialize, Deserialize)]
 pub enum QueryMsg {
     DumpCoverage {},
+}
+
+impl DebugLog {
+    pub fn get_code_coverage_for_address(&self, address: &str) -> Vec<Vec<u8>> {
+        if let Some(cov) = self.code_coverage.get(address) {
+            cov.clone()
+        } else {
+            Vec::new()
+        }
+    }
 }
 
 impl Model {
