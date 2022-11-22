@@ -2,7 +2,7 @@ use crate::{DebugLog, Error, Model, RpcContractInstance};
 use cosmwasm_vm::call_raw;
 use serde::{Deserialize, Serialize};
 
-static COVERAGE_MAX_LEN: usize = 0x100000;
+static COVERAGE_MAX_LEN: usize = 0x200000;
 
 #[derive(Serialize, Deserialize)]
 pub enum QueryMsg {
@@ -50,7 +50,10 @@ mod tests {
     fn test_collect_coverage_single() {
         let mut model = Model::new(MALAGA_RPC_URL, Some(MALAGA_BLOCK_NUMBER), "wasm").unwrap();
         model.enable_code_coverage();
-        let wasm_code = include_bytes!("/home/procfs/cosmwasm-simulate/target/wasm32-unknown-unknown/release/test_contract_cov.wasm");
+        let wasm_code = include_bytes!(concat!(
+            env!("OUT_DIR"),
+            "/wasm32-unknown-unknown/release/test_contract_cov.wasm"
+        ));
         model.add_custom_code(1337, wasm_code).unwrap();
         let msg = to_binary(&InstantiateMsg {}).unwrap();
         let debug_log = model.instantiate(1337, msg.as_slice(), &[]).unwrap();

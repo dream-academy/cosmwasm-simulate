@@ -14,3 +14,7 @@
 # IDEs
 *.iml
 .idea
+
+/build-cov
+/artifacts
+/cov-report

@@ -20,9 +20,14 @@ fn main() -> Result<()> {
         .spawn()
         .expect("Failed to build test_contract");
     let _ = Command::new("cargo")
+        .arg("+nightly")
         .arg("wasm")
         .current_dir("../test-contract-cov")
         .env("CARGO_TARGET_DIR", env::var_os("OUT_DIR").unwrap())
+        .env(
+            "RUSTFLAGS",
+            "--emit=llvm-ir -C instrument-coverage -Zno-profiler-runtime",
+        )
         .spawn()
         .expect("Failed to build test_contract_cov");
     Ok(())

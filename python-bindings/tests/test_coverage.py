@@ -66,10 +66,8 @@ if __name__ == "__main__":
 
     imsg = json.dumps({}).encode()
     res = m.instantiate(1337, imsg, [])
-    print(res.get_err_msg())
-    exit()
     contract_addr = get_contract_addr_from_instantiate_response(res.get_log(), 1337)
 
     covs = res.get_code_coverage_for_address(contract_addr)
-    with open("cov", "wb") as f:
+    with open("cov.profraw", "wb") as f:
         f.write(bytearray(covs[0]))

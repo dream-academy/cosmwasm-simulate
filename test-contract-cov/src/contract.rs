@@ -70,10 +70,6 @@ mod memory {
         Box::into_raw(region)
     }
 
-    /// Returns a box of a Region, which can be sent over a call to extern
-    /// note that this DOES NOT take ownership of the data, and we MUST NOT consume_region
-    /// the resulting data.
-    /// The Box must be dropped (with scope), but not the data
     pub fn build_region(data: &[u8]) -> Box<Region> {
         let data_ptr = data.as_ptr() as usize;
         build_region_from_components(
