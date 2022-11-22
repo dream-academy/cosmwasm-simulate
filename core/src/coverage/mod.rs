@@ -30,8 +30,10 @@ impl Model {
 
 impl RpcContractInstance {
     pub fn dump_coverage(&mut self) -> Result<Vec<u8>, Error> {
-        let result = call_raw(&mut self.instance, "dump_coverage", &[], COVERAGE_MAX_LEN)
-            .map_err(Error::vm_error)?;
+        let result = match call_raw(&mut self.instance, "dump_coverage", &[], COVERAGE_MAX_LEN) {
+            Ok(r) => r,
+            Err(_) => Vec::new(),
+        };
         Ok(result)
     }
 }
