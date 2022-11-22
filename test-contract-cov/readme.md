@@ -19,4 +19,4 @@ Then, build the native object using IR.
 
 After obtaining `cov.profraw` by running the contract, invoke `grcov` using the following command.
 
-`grcov -b artifacts/test_contract_cov.o -s . -t html -o cov_report`
+`grcov cov.profraw --branch -b artifacts/test_contract_cov.o -s . -t html -o cov_report`
