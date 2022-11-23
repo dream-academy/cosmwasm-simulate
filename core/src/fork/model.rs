@@ -28,7 +28,7 @@ pub struct Model {
     // used to generate addresses in instantiate
     code_id_counters: HashMap<u64, u64>,
     // for debugging
-    debug_log: Arc<Mutex<DebugLog>>,
+    pub debug_log: Arc<Mutex<DebugLog>>,
     // for userprovided code
     custom_codes: HashMap<u64, Vec<u8>>,
     // for code coverage
@@ -245,6 +245,7 @@ impl Model {
             let mut instance = self.create_instance(origin)?;
             let env = self.env(origin)?;
             let maybe_response = instance.reply(&env, &reply)?;
+            self.handle_coverage(&mut instance)?;
 
             if maybe_response.is_err() {
                 // propagate error. instance.reply need not error handling
@@ -299,6 +300,7 @@ impl Model {
 
             let mut instance = self.create_instance(origin)?;
             let maybe_response = instance.reply(&env, &reply)?;
+            self.handle_coverage(&mut instance)?;
 
             if maybe_response.is_err() {
                 // propagate error. instance.reply need not error handling
@@ -494,16 +496,7 @@ impl Model {
                 return Ok((ContractResult::Err(e), None));
             }
         };
-        if self.code_coverage_enabled {
-            let cov = instance.dump_coverage()?;
-            self.debug_log
-                .lock()
-                .unwrap()
-                .code_coverage
-                .entry(contract_addr.to_string())
-                .or_insert_with(Vec::new)
-                .push(cov);
-        }
+        self.handle_coverage(&mut instance)?;
         let response = self.handle_response(&contract_addr, &response)?;
         Ok((response, Some(contract_addr)))
     }
@@ -575,16 +568,7 @@ impl Model {
                 return Ok(ContractResult::Err(e));
             }
         };
-        if self.code_coverage_enabled {
-            let cov = instance.dump_coverage()?;
-            self.debug_log
-                .lock()
-                .unwrap()
-                .code_coverage
-                .entry(contract_addr.to_string())
-                .or_insert_with(Vec::new)
-                .push(cov);
-        }
+        self.handle_coverage(&mut instance)?;
         self.handle_response(contract_addr, &response)
     }
 
@@ -598,16 +582,7 @@ impl Model {
         };
         // TODO: fix this, propagate contract error down
         let result = instance.query(&env, &wasm_query)?;
-        if self.code_coverage_enabled {
-            let cov = instance.dump_coverage()?;
-            self.debug_log
-                .lock()
-                .unwrap()
-                .code_coverage
-                .entry(contract_addr.to_string())
-                .or_insert_with(Vec::new)
-                .push(cov);
-        }
+        self.handle_coverage(&mut instance)?;
         // prevent deallocation of box
         Ok(result)
     }

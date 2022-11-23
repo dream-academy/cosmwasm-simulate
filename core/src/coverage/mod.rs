@@ -26,14 +26,25 @@ impl Model {
     pub fn disable_code_coverage(&mut self) {
         self.code_coverage_enabled = false;
     }
+    pub fn handle_coverage(&mut self, instance: &mut RpcContractInstance) -> Result<(), Error> {
+        if self.code_coverage_enabled {
+            let cov = instance.dump_coverage()?;
+            self.debug_log
+                .lock()
+                .unwrap()
+                .code_coverage
+                .entry(instance.address().to_string())
+                .or_insert_with(Vec::new)
+                .push(cov);
+        }
+        Ok(())
+    }
 }
 
 impl RpcContractInstance {
     pub fn dump_coverage(&mut self) -> Result<Vec<u8>, Error> {
-        let result = match call_raw(&mut self.instance, "dump_coverage", &[], COVERAGE_MAX_LEN) {
-            Ok(r) => r,
-            Err(_) => Vec::new(),
-        };
+        let result = call_raw(&mut self.instance, "dump_coverage", &[], COVERAGE_MAX_LEN)
+            .map_err(Error::vm_error)?;
         Ok(result)
     }
 }
