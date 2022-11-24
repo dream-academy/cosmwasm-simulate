@@ -1,7 +1,6 @@
 use cosmwasm_std::{Attribute, Binary, Event, Response};
 use serde::{Deserialize, Serialize};
 use serde_json::to_string;
-use std::collections::HashMap;
 use std::fmt;
 
 #[derive(Serialize, Deserialize, Clone, Default, Debug, PartialEq, Eq)]
@@ -9,7 +8,6 @@ pub struct DebugLog {
     pub logs: Vec<DebugLogEntry>,
     pub err_msg: Option<String>,
     pub stdout: Vec<String>,
-    pub code_coverage: HashMap<String, Vec<Vec<u8>>>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Default, Debug, PartialEq, Eq)]
@@ -32,7 +30,6 @@ impl DebugLog {
             logs: Vec::new(),
             err_msg: None,
             stdout: Vec::new(),
-            code_coverage: HashMap::new(),
         }
     }
 

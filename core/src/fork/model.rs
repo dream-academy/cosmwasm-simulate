@@ -1,3 +1,4 @@
+use crate::coverage::CoverageInfo;
 use crate::fork::api::canonical_to_human;
 use crate::{
     rpc_items, AllStates, ContractState, ContractStorage, CwClientBackend, CwRpcClient, DebugLog,
@@ -32,7 +33,7 @@ pub struct Model {
     // for userprovided code
     custom_codes: HashMap<u64, Vec<u8>>,
     // for code coverage
-    pub code_coverage_enabled: bool,
+    pub coverage_info: CoverageInfo,
 }
 
 const WASM_MAGIC: [u8; 4] = [0, 97, 115, 109];
@@ -72,7 +73,7 @@ impl Clone for Model {
             code_id_counters: self.code_id_counters.clone(),
             debug_log: Arc::new(Mutex::new(self.debug_log.lock().unwrap().clone())),
             custom_codes: self.custom_codes.clone(),
-            code_coverage_enabled: self.code_coverage_enabled,
+            coverage_info: self.coverage_info.clone(),
         }
     }
 }
@@ -86,7 +87,7 @@ impl Model {
             code_id_counters: HashMap::new(),
             debug_log: Arc::new(Mutex::new(DebugLog::new())),
             custom_codes: HashMap::new(),
-            code_coverage_enabled: false,
+            coverage_info: CoverageInfo::new(),
         })
     }
 
@@ -99,7 +100,7 @@ impl Model {
             code_id_counters: HashMap::new(),
             debug_log: Arc::new(Mutex::new(DebugLog::new())),
             custom_codes: HashMap::new(),
-            code_coverage_enabled: false,
+            coverage_info: CoverageInfo::new(),
         })
     }
 
@@ -477,7 +478,9 @@ impl Model {
         let mut instance = RpcContractInstance::new(&contract_addr, wasm_instance);
         let env = self.env(&contract_addr)?;
         // propagate contract error downwards
-        let response = match instance.instantiate(&env, msg, sender, funds)? {
+        let result = instance.instantiate(&env, msg, sender, funds)?;
+        self.handle_coverage(&mut instance)?;
+        let response = match result {
             ContractResult::Ok(r) => {
                 let instantiate_event = Event::new("instantiate")
                     .add_attribute("code_id", code_id.to_string())
@@ -496,7 +499,6 @@ impl Model {
                 return Ok((ContractResult::Err(e), None));
             }
         };
-        self.handle_coverage(&mut instance)?;
         let response = self.handle_response(&contract_addr, &response)?;
         Ok((response, Some(contract_addr)))
     }
@@ -558,7 +560,9 @@ impl Model {
 
         // execute contract code
         // propagate contract error downwards
-        let response = match instance.execute(&env, msg, sender, funds)? {
+        let result = instance.execute(&env, msg, sender, funds)?;
+        self.handle_coverage(&mut instance)?;
+        let response = match result {
             ContractResult::Ok(r) => {
                 self.debug_log.lock().unwrap().append_log(&r);
                 r
@@ -568,7 +572,6 @@ impl Model {
                 return Ok(ContractResult::Err(e));
             }
         };
-        self.handle_coverage(&mut instance)?;
         self.handle_response(contract_addr, &response)
     }
 

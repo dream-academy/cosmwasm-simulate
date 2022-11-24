@@ -38,19 +38,6 @@ impl DebugLog {
         let debug_log = &self_.inner;
         Ok(debug_log.get_stdout())
     }
-
-    fn get_code_coverage_for_address(
-        self_: PyRefMut<Self>,
-        address: &str,
-    ) -> PyResult<Vec<Vec<u8>>> {
-        let debug_log = &self_.inner;
-        Ok(debug_log.get_code_coverage_for_address(address))
-    }
-
-    fn get_code_coverage_all(self_: PyRefMut<Self>) -> PyResult<HashMap<String, Vec<Vec<u8>>>> {
-        let debug_log = &self_.inner;
-        Ok(debug_log.get_code_coverage_all())
-    }
 }
 
 #[pymethods]
@@ -215,6 +202,11 @@ impl Model {
         let model = &mut self_.inner;
         model.disable_code_coverage();
         Ok(())
+    }
+
+    pub fn get_code_coverage(mut self_: PyRefMut<Self>) -> PyResult<HashMap<String, Vec<Vec<u8>>>> {
+        let model = &mut self_.inner;
+        Ok(model.get_coverage())
     }
 }
 

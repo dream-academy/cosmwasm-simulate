@@ -1,49 +1,53 @@
 use std::collections::HashMap;
 
-use crate::{DebugLog, Error, Model, RpcContractInstance};
+use crate::{Error, Model, RpcContractInstance};
 use cosmwasm_vm::call_raw;
-use serde::{Deserialize, Serialize};
 
 static COVERAGE_MAX_LEN: usize = 0x200000;
 
-#[derive(Serialize, Deserialize)]
-pub enum QueryMsg {
-    DumpCoverage {},
+#[derive(Clone)]
+pub struct CoverageInfo {
+    enabled: bool,
+    coverage_data: HashMap<String, Vec<Vec<u8>>>,
 }
 
-impl DebugLog {
-    pub fn get_code_coverage_for_address(&self, address: &str) -> Vec<Vec<u8>> {
-        if let Some(cov) = self.code_coverage.get(address) {
-            cov.clone()
-        } else {
-            Vec::new()
+impl CoverageInfo {
+    pub fn new() -> Self {
+        Self {
+            enabled: false,
+            coverage_data: HashMap::new(),
         }
     }
 
-    pub fn get_code_coverage_all(&self) -> HashMap<String, Vec<Vec<u8>>> {
-        self.code_coverage.clone()
+    pub fn get_coverage(&self) -> HashMap<String, Vec<Vec<u8>>> {
+        self.coverage_data.clone()
+    }
+
+    fn add_coverage(&mut self, address: String, cov_data: Vec<u8>) {
+        self.coverage_data
+            .entry(address)
+            .or_insert_with(Vec::new)
+            .push(cov_data);
     }
 }
 
 impl Model {
     pub fn enable_code_coverage(&mut self) {
-        self.code_coverage_enabled = true;
+        self.coverage_info.enabled = true;
     }
     pub fn disable_code_coverage(&mut self) {
-        self.code_coverage_enabled = false;
+        self.coverage_info.enabled = true;
     }
     pub fn handle_coverage(&mut self, instance: &mut RpcContractInstance) -> Result<(), Error> {
-        if self.code_coverage_enabled {
+        if self.coverage_info.enabled {
             let cov = instance.dump_coverage()?;
-            self.debug_log
-                .lock()
-                .unwrap()
-                .code_coverage
-                .entry(instance.address().to_string())
-                .or_insert_with(Vec::new)
-                .push(cov);
+            self.coverage_info
+                .add_coverage(instance.address().to_string(), cov);
         }
         Ok(())
+    }
+    pub fn get_coverage(&self) -> HashMap<String, Vec<Vec<u8>>> {
+        self.coverage_info.get_coverage()
     }
 }
 
@@ -80,7 +84,7 @@ mod tests {
         ));
         model.add_custom_code(1337, wasm_code).unwrap();
         let msg = to_binary(&InstantiateMsg {}).unwrap();
-        let debug_log = model.instantiate(1337, msg.as_slice(), &[]).unwrap();
-        assert!(debug_log.code_coverage.len() > 0);
+        let _ = model.instantiate(1337, msg.as_slice(), &[]).unwrap();
+        assert!(model.get_coverage().len() > 0);
     }
 }
