@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::{DebugLog, Error, Model, RpcContractInstance};
 use cosmwasm_vm::call_raw;
 use serde::{Deserialize, Serialize};
@@ -16,6 +18,10 @@ impl DebugLog {
         } else {
             Vec::new()
         }
+    }
+
+    pub fn get_code_coverage_all(&self) -> HashMap<String, Vec<Vec<u8>>> {
+        self.code_coverage.clone()
     }
 }
 
@@ -43,8 +49,13 @@ impl Model {
 
 impl RpcContractInstance {
     pub fn dump_coverage(&mut self) -> Result<Vec<u8>, Error> {
-        let result = call_raw(&mut self.instance, "dump_coverage", &[], COVERAGE_MAX_LEN)
-            .map_err(Error::vm_error)?;
+        let result = match call_raw(&mut self.instance, "dump_coverage", &[], COVERAGE_MAX_LEN) {
+            Ok(r) => r,
+            Err(_e) => {
+                // for now, just ignore warnings
+                Vec::new()
+            }
+        };
         Ok(result)
     }
 }

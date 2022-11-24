@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use cosmwasm_simulate::{Addr, Coin, Timestamp, Uint128};
 // we don't import Model and DebugLog in order to use their names for Python classes
 use pyo3::{exceptions::PyRuntimeError, prelude::*};
@@ -43,6 +45,11 @@ impl DebugLog {
     ) -> PyResult<Vec<Vec<u8>>> {
         let debug_log = &self_.inner;
         Ok(debug_log.get_code_coverage_for_address(address))
+    }
+
+    fn get_code_coverage_all(self_: PyRefMut<Self>) -> PyResult<HashMap<String, Vec<Vec<u8>>>> {
+        let debug_log = &self_.inner;
+        Ok(debug_log.get_code_coverage_all())
     }
 }
 
