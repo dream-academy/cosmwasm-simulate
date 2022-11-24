@@ -166,6 +166,13 @@ impl Model {
         Ok(Addr::unchecked(addr))
     }
 
+    fn revert(&mut self, prev_state: Model) -> Model {
+        // don't revert coverage state
+        let cur_state: Model = mem::replace(self, prev_state);
+        self.coverage_info = cur_state.coverage_info.clone();
+        cur_state
+    }
+
     fn create_instance(&self, contract_addr: &Addr) -> Result<RpcContractInstance, Error> {
         self.fetch_contract_state(contract_addr)?;
         let states = self.states.read().unwrap();
@@ -403,7 +410,7 @@ impl Model {
 
         let (res, _) = self.instantiate_inner(code_id, &Addr::unchecked(sender), msg, funds)?;
         if res.is_err() {
-            let orig_state = mem::replace(self, state_copy);
+            let orig_state = self.revert(state_copy);
             let debug_log: DebugLog =
                 mem::replace(&mut orig_state.debug_log.lock().unwrap(), empty_log);
             Ok(debug_log)
@@ -516,7 +523,7 @@ impl Model {
             .execute_inner(contract_addr, &Addr::unchecked(sender), msg, funds)?
             .is_err()
         {
-            let orig_state = mem::replace(self, state_copy);
+            let orig_state = self.revert(state_copy);
             let debug_log: DebugLog =
                 mem::replace(&mut orig_state.debug_log.lock().unwrap(), empty_log);
             Ok(debug_log)
@@ -584,10 +591,9 @@ impl Model {
             msg: Binary::from(msg),
         };
         // TODO: fix this, propagate contract error down
-        let result = instance.query(&env, &wasm_query)?;
+        let result = instance.query(&env, &wasm_query);
         self.handle_coverage(&mut instance)?;
-        // prevent deallocation of box
-        Ok(result)
+        Ok(result?)
     }
 
     pub fn bank_query(&mut self, bank_query_: &[u8]) -> Result<Binary, Error> {

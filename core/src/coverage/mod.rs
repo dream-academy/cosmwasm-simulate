@@ -36,7 +36,7 @@ impl Model {
         self.coverage_info.enabled = true;
     }
     pub fn disable_code_coverage(&mut self) {
-        self.coverage_info.enabled = true;
+        self.coverage_info.enabled = false;
     }
     pub fn handle_coverage(&mut self, instance: &mut RpcContractInstance) -> Result<(), Error> {
         if self.coverage_info.enabled {
