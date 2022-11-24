@@ -102,6 +102,7 @@ impl Querier for RpcMockQuerier {
         request: &[u8],
         _gas_limit: u64,
     ) -> BackendResult<SystemResult<ContractResult<Binary>>> {
+        println!("{}", String::from_utf8(request.to_vec()).unwrap());
         let request: QueryRequest<()> = match from_slice(request) {
             Ok(v) => v,
             Err(e) => {

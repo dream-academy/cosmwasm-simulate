@@ -1,7 +1,7 @@
+use bincode;
 use cosmwasm_std::Timestamp;
 use hex;
 use prost::Message;
-use ron;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::cmp::Eq;
@@ -110,12 +110,12 @@ impl RpcCache {
         let cachefile_path = Path::new(&cachefile);
         let (file, inner, initialized) = if cachefile_path.is_file() {
             let mut file = rwopen(cachefile_path).map_err(Error::io_error)?;
-            let mut file_contents = String::new();
+            let mut file_contents = Vec::new();
             let _ = file
-                .read_to_string(&mut file_contents)
+                .read_to_end(&mut file_contents)
                 .map_err(Error::io_error)?;
             let inner: RpcCacheInner =
-                ron::from_str(&file_contents).map_err(Error::format_error)?;
+                bincode::deserialize(&file_contents).map_err(Error::format_error)?;
             (file, inner, true)
         } else {
             let file = rwopen(cachefile_path).map_err(Error::io_error)?;
@@ -174,9 +174,9 @@ impl RpcCache {
         match self {
             Self::Empty => Ok(()),
             Self::FileBacked { inner, file, .. } => {
-                let serialized = ron::to_string(inner).map_err(Error::format_error)?;
+                let serialized = bincode::serialize(inner).map_err(Error::format_error)?;
                 file.seek(SeekFrom::Start(0)).map_err(Error::io_error)?;
-                file.write(serialized.as_bytes()).map_err(Error::io_error)?;
+                file.write(&serialized).map_err(Error::io_error)?;
                 Ok(())
             }
         }
@@ -461,6 +461,8 @@ mod tests {
     use cosmwasm_std::{Addr, Uint128};
     use serde::{Deserialize, Serialize};
 
+    use super::RpcCache;
+
     const MALAGA_RPC_URL: &str = "https://rpc.malaga-420.cosmwasm.com:443";
     const MALAGA_CHAIN_ID: &str = "malaga-420";
     const MALAGA_BLOCK_NUMBER: u64 = 2346678;
@@ -585,5 +587,19 @@ mod tests {
             .unwrap();
         // wasm header is \x00asm, for some contracts it may be gzip
         assert_eq!(&wasm_code[0..4], &vec![0, 97, 115, 109]);
+    }
+
+    #[test]
+    fn test_cache() {
+        let mut cache = RpcCache::file_backed(MALAGA_RPC_URL, 100000).unwrap();
+        let path = "aaaaaaaa";
+        let data = "bbbbbbbb".as_bytes();
+        let response = "cccccccc".as_bytes();
+        cache.write(path, data, response).unwrap();
+        drop(cache);
+
+        let cache = RpcCache::file_backed(MALAGA_RPC_URL, 100000).unwrap();
+        let data = cache.read(path, data).unwrap();
+        println!("{:?}", &data);
     }
 }
