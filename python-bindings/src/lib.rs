@@ -38,6 +38,13 @@ impl DebugLog {
         let debug_log = &self_.inner;
         Ok(debug_log.get_stdout())
     }
+
+    fn get_call_trace(
+        self_: PyRefMut<Self>,
+    ) -> PyResult<(HashMap<usize, Vec<usize>>, HashMap<usize, String>)> {
+        let debug_log = &self_.inner;
+        Ok(debug_log.get_call_trace())
+    }
 }
 
 #[pymethods]

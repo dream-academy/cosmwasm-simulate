@@ -1,4 +1,3 @@
-from re import S
 from cwsimpy import Model
 import json
 import base64

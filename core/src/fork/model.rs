@@ -199,8 +199,8 @@ impl Model {
     #[allow(clippy::too_many_arguments)]
     fn handle_submessage_instantiate(
         &mut self,
-        admin: &Option<String>,
         origin: &Addr,
+        admin: &Option<String>,
         code_id: u64,
         msg: &Binary,
         funds: &[Coin],
@@ -239,6 +239,7 @@ impl Model {
                 },
                 data: Vec::new(),
             };
+            let env = self.env(origin)?;
             let reply = Reply {
                 id: sub_msg_id,
                 result: match response {
@@ -251,22 +252,30 @@ impl Model {
             };
 
             let mut instance = self.create_instance(origin)?;
-            let env = self.env(origin)?;
+
+            // open new call context
+            let call_id = self.debug_log.lock().unwrap().begin_reply(origin, msg);
+
             let maybe_response = instance.reply(&env, &reply)?;
             self.handle_coverage(&mut instance)?;
 
-            if maybe_response.is_err() {
+            if let ContractResult::Err(e) = &maybe_response {
                 // propagate error. instance.reply need not error handling
                 // no need to re-insert the instance
+                self.debug_log.lock().unwrap().begin_error(e);
                 Ok(maybe_response)
             } else {
                 let response = maybe_response.unwrap();
                 self.debug_log.lock().unwrap().append_log(&response);
-                self.handle_response(origin, &response)
+                let response = self.handle_response(origin, &response)?;
+                // close call context
+                self.debug_log.lock().unwrap().end_reply(call_id);
+                Ok(response)
             }
         }
         // if reply is not called, but the current result is an error, propagate the error
-        else if response.is_err() {
+        else if let ContractResult::Err(e) = &response {
+            self.debug_log.lock().unwrap().begin_error(e);
             Ok(ContractResult::Err(response.unwrap_err()))
         }
         // otherwise, recursively handle the submessages
@@ -307,21 +316,30 @@ impl Model {
             };
 
             let mut instance = self.create_instance(origin)?;
+
+            // open new call context
+            let call_id = self.debug_log.lock().unwrap().begin_reply(origin, msg);
+
             let maybe_response = instance.reply(&env, &reply)?;
             self.handle_coverage(&mut instance)?;
 
-            if maybe_response.is_err() {
+            if let ContractResult::Err(e) = &maybe_response {
                 // propagate error. instance.reply need not error handling
                 // no need to re-insert the instance
+                self.debug_log.lock().unwrap().begin_error(e);
                 Ok(maybe_response)
             } else {
                 let response = maybe_response.unwrap();
                 self.debug_log.lock().unwrap().append_log(&response);
-                self.handle_response(origin, &response)
+                let response = self.handle_response(origin, &response)?;
+                // close call context
+                self.debug_log.lock().unwrap().end_reply(call_id);
+                Ok(response)
             }
         }
         // if reply is not called, but the current result is an error, propagate the error
-        else if response.is_err() {
+        else if let ContractResult::Err(e) = &response {
+            self.debug_log.lock().unwrap().begin_error(e);
             Ok(ContractResult::Err(response.unwrap_err()))
         }
         // otherwise, recursively handle the submessages
@@ -353,8 +371,8 @@ impl Model {
                         funds,
                         label: _,
                     } => self.handle_submessage_instantiate(
-                        admin,
                         origin,
+                        admin,
                         *code_id,
                         msg,
                         funds,
@@ -484,6 +502,14 @@ impl Model {
             .contract_state_insert(contract_addr.clone(), contract_state);
         let mut instance = RpcContractInstance::new(&contract_addr, wasm_instance);
         let env = self.env(&contract_addr)?;
+
+        // open new call context
+        let call_id = self
+            .debug_log
+            .lock()
+            .unwrap()
+            .begin_instantiate(&contract_addr, msg);
+
         // propagate contract error downwards
         let result = instance.instantiate(&env, msg, sender, funds)?;
         self.handle_coverage(&mut instance)?;
@@ -502,11 +528,16 @@ impl Model {
                     .write()
                     .unwrap()
                     .contract_state_remove(&contract_addr);
-                self.debug_log.lock().unwrap().set_err_msg(&e);
+                let mut debug_log = self.debug_log.lock().unwrap();
+                debug_log.set_err_msg(&e);
+                debug_log.begin_error(&e);
                 return Ok((ContractResult::Err(e), None));
             }
         };
         let response = self.handle_response(&contract_addr, &response)?;
+
+        // close calling context
+        self.debug_log.lock().unwrap().end_instantiate(call_id);
         Ok((response, Some(contract_addr)))
     }
 
@@ -565,6 +596,13 @@ impl Model {
             };
         }
 
+        // open new call context
+        let call_id = self
+            .debug_log
+            .lock()
+            .unwrap()
+            .begin_execute(contract_addr, msg);
+
         // execute contract code
         // propagate contract error downwards
         let result = instance.execute(&env, msg, sender, funds)?;
@@ -575,11 +613,17 @@ impl Model {
                 r
             }
             ContractResult::Err(e) => {
-                self.debug_log.lock().unwrap().set_err_msg(&e);
+                let mut debug_log = self.debug_log.lock().unwrap();
+                debug_log.set_err_msg(&e);
+                debug_log.begin_error(&e);
                 return Ok(ContractResult::Err(e));
             }
         };
-        self.handle_response(contract_addr, &response)
+        let response = self.handle_response(contract_addr, &response)?;
+
+        // close calling context
+        self.debug_log.lock().unwrap().end_execute(call_id);
+        Ok(response)
     }
 
     /// for now, only support WASM queries
@@ -735,6 +779,8 @@ mod test {
 
     const MALAGA_RPC_URL: &str = "https://rpc.malaga-420.cosmwasm.com:443";
     const MALAGA_BLOCK_NUMBER: u64 = 2326474;
+    const FACTORY_ADDRESS_MALAGA: &str =
+        "wasm1hczjykytm4suw4586j5v42qft60gc4j307gf7cxuazfg7jxt4h4sjvp7rx";
     const PAIR_ADDRESS_MALAGA: &str =
         "wasm15le5evw4regnwf9lrjnpakr2075fcyp4n4yzpelvqcuevzkw2lss46hslz";
     const TOKEN_ADDRESS_MALAGA: &str =
@@ -958,5 +1004,37 @@ mod test {
         let query_res: ReadNumberResponse =
             from_binary(&model.wasm_query(&contract_address, msg.as_slice()).unwrap()).unwrap();
         assert_eq!(query_res.value, 1);
+    }
+
+    #[test]
+    fn test_call_trace() {
+        let mut model = Model::new(MALAGA_RPC_URL, Some(MALAGA_BLOCK_NUMBER), "wasm").unwrap();
+        let create_pair_msg = json!({
+            "create_pair": {
+                "asset_infos": [
+                  {
+                    "native_token": {
+                      "denom": "umlg"
+                    }
+                  },
+                  {
+                    "native_token": {
+                      "denom": "umlg"
+                    }
+                  }
+                ]
+              }
+        })
+        .to_string();
+        let res = model
+            .execute(
+                &Addr::unchecked(FACTORY_ADDRESS_MALAGA),
+                create_pair_msg.as_bytes(),
+                &vec![],
+            )
+            .unwrap();
+
+        // first pair creation results in an error, due to same native token error
+        assert_eq!(res.call_trace.call_graph.get(&0).unwrap().len(), 1);
     }
 }

@@ -111,6 +111,7 @@ impl Querier for RpcMockQuerier {
                 )
             }
         };
+
         match request {
             QueryRequest::Bank(bank_query) => {
                 match self.states.write().unwrap().bank_query(&bank_query) {
@@ -221,7 +222,22 @@ impl Querier for RpcMockQuerier {
                         Ok(i) => i,
                     };
                     let mut instance = RpcContractInstance::new(&contract_addr, wasm_instance);
-                    match instance.query(&env, &wasm_query) {
+                    let call_id = if let WasmQuery::Smart {
+                        contract_addr: _,
+                        msg,
+                    } = &wasm_query
+                    {
+                        Some(
+                            self.debug_log
+                                .lock()
+                                .unwrap()
+                                .begin_query(&contract_addr, msg.as_slice()),
+                        )
+                    } else {
+                        None
+                    };
+
+                    let result = match instance.query(&env, &wasm_query) {
                         Ok(response) => (
                             Ok(SystemResult::Ok(ContractResult::Ok(response))),
                             GasInfo::free(),
@@ -230,7 +246,13 @@ impl Querier for RpcMockQuerier {
                             Err(BackendError::Unknown { msg: e.to_string() }),
                             GasInfo::free(),
                         ),
+                    };
+
+                    if let Some(call_id) = call_id {
+                        self.debug_log.lock().unwrap().end_query(call_id);
                     }
+
+                    result
                 }
             }
             _ => unimplemented!(),
