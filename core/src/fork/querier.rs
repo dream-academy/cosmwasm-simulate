@@ -179,6 +179,7 @@ impl Querier for RpcMockQuerier {
                     let states = self.states.read().unwrap();
                     let canonical_address_length = states.canonical_address_length;
                     let bech32_prefix = states.bech32_prefix.to_string();
+                    drop(states);
                     let storage = match self.mock_storage(&contract_state) {
                         Ok(s) => s,
                         Err(e) => {
@@ -266,5 +267,52 @@ impl RpcMockQuerier {
             states: states.clone(),
             debug_log: debug_log.clone(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::Model;
+    use cosmwasm_std::Addr;
+    use serde_json::{from_slice, json, Value};
+
+    const RPC_URL: &str = "http://5.9.66.60:26657";
+    const ROUTER_ADDR: &str = "terra13ehuhysn5mqjeaheeuew2gjs785f6k7jm8vfsqg3jhtpkwppcmzqcu7chk";
+    const BECH32_PREFIX: &str = "terra";
+    const BLOCK_NUMBER: u64 = 2540362;
+
+    #[test]
+    fn test_querier_no_deadlock() {
+        let mut model = Model::new(RPC_URL, Some(BLOCK_NUMBER), BECH32_PREFIX).unwrap();
+        let query_msg_json = json!({
+            "simulate_swap_operations" : {
+                "offer_amount" : "10000",
+                "operations" : [
+                    {
+                        "terra_swap": {
+                            "offer_asset_info": {
+                                "native_token": {
+                                "denom": "ibc/B3504E092456BA618CC28AC671A71FB08C6CA0FD0BE7C8A5B5A3E2DD933CC9E4"
+                                }
+                            },
+                            "ask_asset_info": {
+                                "native_token": {
+                                    "denom": "uluna"
+                                }
+                            }
+                        }
+                    }
+                ]
+            }}
+        );
+        let query_msg = query_msg_json.to_string();
+        let result: Value = from_slice(
+            model
+                .wasm_query(&Addr::unchecked(ROUTER_ADDR), query_msg.as_bytes())
+                .unwrap()
+                .as_slice(),
+        )
+        .unwrap();
+        println!("{}", result)
     }
 }
