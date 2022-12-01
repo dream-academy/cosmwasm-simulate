@@ -17,6 +17,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::mem;
 use std::sync::{Arc, Mutex, RwLock};
+use wasmer::Module;
 
 use super::lcd::CwLcdClient;
 
@@ -34,6 +35,8 @@ pub struct Model {
     custom_codes: HashMap<u64, Vec<u8>>,
     // for code coverage
     pub coverage_info: CoverageInfo,
+    // for saving webassembly compilation time
+    pub wasm_cache: HashMap<Vec<u8>, Module>,
 }
 
 const WASM_MAGIC: [u8; 4] = [0, 97, 115, 109];
@@ -52,19 +55,6 @@ pub fn maybe_unzip(input: Vec<u8>) -> Result<Vec<u8>, Error> {
     }
 }
 
-pub fn create_instance_from_code(
-    code: &[u8],
-    deps: RpcBackend,
-    options: InstanceOptions,
-) -> Result<RpcInstance, Error> {
-    use cosmwasm_vm::internals::compile;
-    let module = compile(code, None, &[]).map_err(Error::vm_error)?;
-    match instance_from_module(&module, deps, options.gas_limit, options.print_debug, None) {
-        Err(e) => Err(Error::vm_error(e)),
-        Ok(i) => Ok(i),
-    }
-}
-
 impl Clone for Model {
     fn clone(&self) -> Self {
         Model {
@@ -74,6 +64,7 @@ impl Clone for Model {
             debug_log: Arc::new(Mutex::new(self.debug_log.lock().unwrap().clone())),
             custom_codes: self.custom_codes.clone(),
             coverage_info: self.coverage_info.clone(),
+            wasm_cache: self.wasm_cache.clone(),
         }
     }
 }
@@ -88,6 +79,7 @@ impl Model {
             debug_log: Arc::new(Mutex::new(DebugLog::new())),
             custom_codes: HashMap::new(),
             coverage_info: CoverageInfo::new(),
+            wasm_cache: HashMap::new(),
         })
     }
 
@@ -101,6 +93,7 @@ impl Model {
             debug_log: Arc::new(Mutex::new(DebugLog::new())),
             custom_codes: HashMap::new(),
             coverage_info: CoverageInfo::new(),
+            wasm_cache: HashMap::new(),
         })
     }
 
@@ -416,6 +409,29 @@ impl Model {
         Ok(())
     }
 
+    pub fn create_instance_from_code(
+        &mut self,
+        code: &[u8],
+        deps: RpcBackend,
+        options: InstanceOptions,
+    ) -> Result<RpcInstance, Error> {
+        use cosmwasm_vm::internals::compile;
+        let mut hasher = Sha256::new();
+        hasher.update(code);
+        let code_hash = hasher.finalize().to_vec();
+        let module = if let Some(module) = self.wasm_cache.get(&code_hash) {
+            module.clone()
+        } else {
+            let module = compile(code, None, &[]).map_err(Error::vm_error)?;
+            self.wasm_cache.insert(code_hash, module.clone());
+            module
+        };
+        match instance_from_module(&module, deps, options.gas_limit, options.print_debug, None) {
+            Err(e) => Err(Error::vm_error(e)),
+            Ok(i) => Ok(i),
+        }
+    }
+
     pub fn instantiate(
         &mut self,
         code_id: u64,
@@ -489,7 +505,7 @@ impl Model {
                     .query_wasm_contract_code(code_id)?,
             )?
         };
-        let wasm_instance = create_instance_from_code(wasm_code.as_slice(), deps, options)?;
+        let wasm_instance = self.create_instance_from_code(wasm_code.as_slice(), deps, options)?;
 
         // create a temporary contract_state, which will be deleted if instantiation fails
         let contract_state = ContractState {
